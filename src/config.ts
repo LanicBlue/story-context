@@ -1,7 +1,10 @@
 import type { SmartContextConfig } from "./types.js";
 
+/** Chars per token for budget estimation (no tokenizer needed). */
+export const CHARS_PER_TOKEN = 4;
+
 const DEFAULTS: SmartContextConfig = {
-  maxHistoryChars: 12_000,
+  maxHistoryTokens: 16_000,
   dedupReads: true,
   memoryNotesLimit: 5,
   recentWindowSize: 6,
@@ -18,8 +21,9 @@ const DEFAULTS: SmartContextConfig = {
   storageDir: "",
   outlineSummaryEnabled: false,
   contentFilters: [],
-  compactCoreChars: 6000,
-  compactOverlapChars: 1000,
+  compactCoreTokens: 6000,
+  compactOverlapTokens: 1000,
+  recentEventCount: 10,
   sessionFilter: "main",
 };
 
@@ -28,7 +32,7 @@ export function resolveConfig(
 ): SmartContextConfig {
   const src = raw ?? {};
   return {
-    maxHistoryChars: positiveInt(src.maxHistoryChars, DEFAULTS.maxHistoryChars),
+    maxHistoryTokens: positiveInt(src.maxHistoryTokens, DEFAULTS.maxHistoryTokens),
     dedupReads: src.dedupReads !== false,
     memoryNotesLimit: positiveInt(src.memoryNotesLimit, DEFAULTS.memoryNotesLimit),
     recentWindowSize: positiveInt(src.recentWindowSize, DEFAULTS.recentWindowSize),
@@ -49,8 +53,9 @@ export function resolveConfig(
     storageDir: typeof src.storageDir === "string" ? src.storageDir : DEFAULTS.storageDir,
     outlineSummaryEnabled: src.outlineSummaryEnabled === true,
     contentFilters: parseContentFilters(src.contentFilters),
-    compactCoreChars: positiveInt(src.compactCoreChars, DEFAULTS.compactCoreChars),
-    compactOverlapChars: positiveInt(src.compactOverlapChars, DEFAULTS.compactOverlapChars),
+    compactCoreTokens: positiveInt(src.compactCoreTokens, DEFAULTS.compactCoreTokens),
+    compactOverlapTokens: positiveInt(src.compactOverlapTokens, DEFAULTS.compactOverlapTokens),
+    recentEventCount: positiveInt(src.recentEventCount, DEFAULTS.recentEventCount),
     sessionFilter: parseSessionFilter(src.sessionFilter),
   };
 }
@@ -81,10 +86,9 @@ function parseContentFilters(value: unknown): SmartContextConfig["contentFilters
 function parseSessionFilter(value: unknown): SmartContextConfig["sessionFilter"] {
   if (value === "all") return "all";
   if (Array.isArray(value)) {
-    // Regex patterns
     return value.filter((v): v is string => typeof v === "string");
   }
-  return "main"; // default: only main session
+  return "main";
 }
 
 function positiveInt(value: unknown, fallback: number): number {

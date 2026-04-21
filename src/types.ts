@@ -20,11 +20,8 @@ export type SessionState = {
   compressedWindows: CompressedWindow[];
   /** Messages in [0, activeEnd) have been compressed to disk. */
   activeEnd: number;
-  memory: {
-    task: string;
-    files: string[];
-    notes: string[];
-  };
+  /** Event-focus state: null means auto-detect mode. */
+  focusedEventId: string | null;
   seenReads: Map<string, number>; // path -> message index
   /** Event index for this session. */
   eventIndex?: EventIndex;
@@ -39,9 +36,11 @@ export type Summarizer = {
 
 /** Plugin configuration resolved from openclaw.plugin.json. */
 export type SmartContextConfig = {
-  maxHistoryChars: number;
+  // Token-based budgets (internally converted to chars × 4)
+  maxHistoryTokens: number;
+  compactCoreTokens: number;
+  compactOverlapTokens: number;
   dedupReads: boolean;
-  memoryNotesLimit: number;
   recentWindowSize: number;
   // Summarization
   summaryEnabled: boolean;
@@ -65,9 +64,8 @@ export type SmartContextConfig = {
     caseSensitive?: boolean;
     granularity: "message" | "block" | "line";
   }>;
-  // Compaction
-  compactCoreChars: number;
-  compactOverlapChars: number;
+  // Event context
+  recentEventCount: number;
   // Session filtering
   sessionFilter: "all" | "main" | string[];
 };

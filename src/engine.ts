@@ -35,15 +35,15 @@ export type ContextEngineInfo = {
   ownsCompaction?: boolean;
   turnMaintenanceMode?: "foreground" | "background";
 };
-import { resolveConfig } from "./config.js";
+import { resolveConfig, CHARS_PER_TOKEN } from "./config.js";
 import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
 import { ContentProcessor } from "./content-processor.js";
 import { ContentStorage } from "./content-storage.js";
 import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { parseEventOrientedOutput, extractEventsStructural } from "./event-extractor.js";
+import { extractEventsStructural } from "./event-extractor.js";
 import { EventIndexManager } from "./event-index.js";
 import { EventStorage } from "./event-storage.js";
-import type { EventSummary } from "./event-types.js";
+import type { EventSummary, EventDocument, EntityDocument } from "./event-types.js";
 
 export class SmartContextEngine {
   readonly info: ContextEngineInfo = {
@@ -60,11 +60,13 @@ export class SmartContextEngine {
   private readonly storage: ContentStorage;
   private readonly compactor: Compactor;
   private readonly eventManagers = new Map<string, EventIndexManager>();
+  private readonly eventStorage: EventStorage;
 
   constructor(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
     this.config = resolveConfig(config);
     this.summarizer = summarizer;
     this.storage = new ContentStorage(this.config.storageDir || undefined);
+    this.eventStorage = new EventStorage(this.storage);
     this.contentProcessor = new ContentProcessor(
       {
         largeTextThreshold: this.config.largeTextThreshold,
@@ -89,7 +91,7 @@ export class SmartContextEngine {
         messages: [],
         compressedWindows: [],
         activeEnd: 0,
-        memory: { task: "", files: [], notes: [] },
+        focusedEventId: null,
         seenReads: new Map(),
         eventIndex: {
           documents: new Map(),
@@ -110,8 +112,6 @@ export class SmartContextEngine {
     if (!sessionKey) return true; // No key provided — allow (e.g. testing)
 
     if (filter === "main") {
-      // Main session keys look like: agent:{agentId}:main
-      // or without :main suffix for the default agent
       return isMainSessionKey(sessionKey);
     }
 
@@ -180,47 +180,71 @@ export class SmartContextEngine {
     s.messages.push(processedMessage);
 
     const role = extractRole(params.message);
-    if (role === "user" && !s.memory.task) {
-      s.memory.task = this.clip(extractText(params.message), 300);
-    }
 
     if (role === "toolResult") {
-      this.updateToolMemory(s, processedMessage, idx);
+      this.updateSeenReads(s, processedMessage, idx);
     }
 
     return { ingested: true };
   }
 
-  private updateToolMemory(s: SessionState, message: unknown, idx: number): void {
+  private updateSeenReads(s: SessionState, message: unknown, idx: number): void {
+    if (!this.config.dedupReads) return;
+
     const toolName = extractToolName(message);
     const filePath = extractToolArg(message, "path");
 
-    if (this.config.dedupReads) {
-      if (toolName === "read_file" && filePath) {
-        s.seenReads.set(filePath, idx);
-      }
-      if (
-        (toolName === "write_file" || toolName === "patch_file") &&
-        filePath
-      ) {
-        s.seenReads.delete(filePath);
-      }
+    if (toolName === "read_file" && filePath) {
+      s.seenReads.set(filePath, idx);
     }
-
-    if (filePath && (toolName === "read_file" || toolName === "write_file" || toolName === "patch_file")) {
-      this.remember(s.memory.files, filePath, 8);
+    if (
+      (toolName === "write_file" || toolName === "patch_file") &&
+      filePath
+    ) {
+      s.seenReads.delete(filePath);
     }
-
-    const text = extractText(message).replace(/\n/g, " ");
-    const note = `${toolName}: ${this.clip(text, 220)}`;
-    this.remember(s.memory.notes, note, this.config.memoryNotesLimit);
   }
 
-  private remember(bucket: string[], item: string, limit: number): void {
-    const idx = bucket.indexOf(item);
-    if (idx !== -1) bucket.splice(idx, 1);
-    bucket.push(item);
-    if (bucket.length > limit) bucket.splice(0, bucket.length - limit);
+  // ── Event Focus ─────────────────────────────────────────────────
+
+  /** Set the focused event for a session (tool-call or explicit). */
+  focusEvent(sessionId: string, eventId: string): void {
+    const s = this.state(sessionId);
+    s.focusedEventId = eventId;
+  }
+
+  /** Clear focus, returning to auto-detect mode. */
+  unfocusEvent(sessionId: string): void {
+    const s = this.state(sessionId);
+    s.focusedEventId = null;
+  }
+
+  /** Resolve the current focus event: explicit > auto-detect > none. */
+  private resolveFocusEvent(sessionId: string): EventDocument | undefined {
+    let mgr: EventIndexManager;
+    try {
+      mgr = this.getEventManager(sessionId);
+    } catch {
+      return undefined;
+    }
+
+    const s = this.state(sessionId);
+
+    // Explicit focus
+    if (s.focusedEventId) {
+      const doc = mgr.getAllEvents().find((e) => e.id === s.focusedEventId);
+      if (doc) return doc;
+    }
+
+    // Auto-detect: most recently updated active event
+    const active = mgr.getActiveEvents();
+    if (active.length > 0) return active[0];
+
+    // Fallback: most recently updated completed event
+    const all = mgr.getAllEvents()
+      .filter((e) => e.status !== "active")
+      .sort((a, b) => b.lastUpdated - a.lastUpdated);
+    return all[0];
   }
 
   // ── assemble ────────────────────────────────────────────────────
@@ -236,7 +260,6 @@ export class SmartContextEngine {
     }
     const s = this.state(params.sessionId);
     const active = [...this.activeMessages(s), ...params.messages];
-    const budget = this.config.maxHistoryChars;
     const recentStart = Math.max(0, active.length - this.config.recentWindowSize);
 
     const selected: unknown[] = [];
@@ -259,40 +282,34 @@ export class SmartContextEngine {
 
       selected.push(msg);
       totalChars += extractText(msg).length;
-
-      // Drop oldest if over budget
-      while (totalChars > budget && selected.length > 1) {
-        const dropped = selected.shift()!;
-        totalChars -= extractText(dropped).length;
-      }
     }
 
     const systemParts: string[] = [];
 
-    // Memory prompt
-    const memoryPrompt = this.buildMemoryPrompt(s);
-    if (memoryPrompt) systemParts.push(memoryPrompt);
+    // Layer 1: Focus event + entity descriptions
+    const focusContext = await this.buildFocusEventContext(params.sessionId);
+    if (focusContext) systemParts.push(focusContext);
 
-    // Event context
-    const eventContext = this.buildEventContext(params.sessionId);
-    if (eventContext) systemParts.push(eventContext);
-
-    // Summary refs (legacy)
-    const summaryRefs = this.buildSummaryRefs(s);
-    if (summaryRefs) systemParts.push(summaryRefs);
+    // Layer 2: Recent events
+    const recentEvents = await this.buildRecentEvents(params.sessionId);
+    if (recentEvents) systemParts.push(recentEvents);
 
     const estimatedTokens = Math.ceil(
-      (totalChars + systemParts.join("\n").length) / 4,
+      (totalChars + systemParts.join("\n").length) / CHARS_PER_TOKEN,
     );
 
     return {
       messages: selected,
       estimatedTokens,
-      systemPromptAddition: systemParts.length > 0 ? systemParts.join("\n") : undefined,
+      systemPromptAddition: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
     };
   }
 
-  private buildEventContext(sessionId: string): string | undefined {
+  /** Build Layer 1: focus event full detail + entity descriptions. */
+  private async buildFocusEventContext(sessionId: string): Promise<string | undefined> {
+    const focusEvent = this.resolveFocusEvent(sessionId);
+    if (!focusEvent) return undefined;
+
     let mgr: EventIndexManager;
     try {
       mgr = this.getEventManager(sessionId);
@@ -300,66 +317,143 @@ export class SmartContextEngine {
       return undefined;
     }
 
-    const activeEvents = mgr.getActiveEvents();
-    const allEvents = mgr.getAllEvents();
-    if (allEvents.length === 0) return undefined;
+    const parts: string[] = [];
+    parts.push(`## Current Focus: [[${focusEvent.id}]] ${focusEvent.title}`);
+    parts.push("");
+    parts.push("### Attributes");
+    parts.push(`- Subject: [[subject:${focusEvent.attributes.subject}]]`);
+    parts.push(`- Type: [[type:${focusEvent.attributes.type}]]`);
+    parts.push(`- Scenario: [[scenario:${focusEvent.attributes.scenario}]]`);
+    parts.push("");
+    parts.push(`### Status: ${focusEvent.status}`);
+    parts.push("");
+    parts.push("### Narrative (full)");
+    parts.push(focusEvent.narrative.slice(-2000));
 
-    const parts: string[] = ["## Events"];
-
-    // Active events with full context
-    for (const evt of activeEvents.slice(0, 5)) {
-      parts.push("");
-      parts.push(`### [[${evt.id}]] ${evt.title}`);
-      parts.push(`Status: ${evt.status}`);
-      parts.push(
-        `Subject: [[subject:${evt.attributes.subject}]] | ` +
-        `Type: [[type:${evt.attributes.type}]] | ` +
-        `Scenario: [[scenario:${evt.attributes.scenario}]]`,
-      );
-      parts.push(evt.narrative.slice(-300));
+    // Extract task/files/operations from linked summaries
+    const summaryDetails = await this.extractSummaryDetails(sessionId, focusEvent);
+    if (summaryDetails.task) {
+      parts.push("", "### Task");
+      for (const line of summaryDetails.task.split("\n")) {
+        if (line.trim()) parts.push(`- ${line.trim().replace(/^-\s*/, "")}`);
+      }
     }
-
-    // Completed events as compact list
-    const completed = allEvents.filter((e) => e.status !== "active");
-    if (completed.length > 0) {
-      parts.push("");
-      parts.push("## Completed Events");
-      for (const evt of completed.slice(0, 10)) {
-        parts.push(`- [[${evt.id}]] ${evt.title} (${evt.status})`);
+    if (summaryDetails.files.length > 0) {
+      parts.push("", "### Files");
+      for (const f of summaryDetails.files) {
+        parts.push(`- ${f}`);
+      }
+    }
+    if (summaryDetails.operations.length > 0) {
+      parts.push("", "### Recent Operations");
+      parts.push("| Operation | Target | Result |");
+      parts.push("|------|------|------|");
+      for (const op of summaryDetails.operations.slice(-10)) {
+        parts.push(`| ${op.op} | ${op.target} | ${op.result} |`);
       }
     }
 
-    return parts.join("\n");
-  }
-
-  private buildSummaryRefs(s: SessionState): string | undefined {
-    if (s.compressedWindows.length === 0) return undefined;
-
-    const parts: string[] = ["Previous conversation summaries:"];
-    for (let i = 0; i < s.compressedWindows.length; i++) {
-      const w = s.compressedWindows[i];
-      parts.push(`- ${w.storagePath} (${w.originalChars} chars → ${w.compressedChars} chars, messages ${w.messageRange[0]}-${w.messageRange[1] - 1})`);
+    // Sources
+    if (focusEvent.sources.length > 0) {
+      parts.push("", "### Sources");
+      for (const src of focusEvent.sources) {
+        parts.push(`- ${src.summaryPath} (msg ${src.messageRange[0]}-${src.messageRange[1]})`);
+      }
     }
+
+    // Entity descriptions
+    const entityParts = await this.buildEntityDescriptions(mgr, focusEvent);
+    if (entityParts) {
+      parts.push("", "## Entity Context");
+      parts.push(entityParts);
+    }
+
     return parts.join("\n");
   }
 
-  private buildMemoryPrompt(s: SessionState): string | undefined {
+  /** Extract task/files/operations from summary files linked to an event. */
+  private async extractSummaryDetails(
+    sessionId: string,
+    event: EventDocument,
+  ): Promise<{ task: string; files: string[]; operations: Array<{ op: string; target: string; result: string }> }> {
+    const result = { task: "", files: [] as string[], operations: [] as Array<{ op: string; target: string; result: string }> };
+
+    for (const src of event.sources.slice(-3)) {
+      const partials = await this.eventStorage.readSummaryPartials(sessionId, src.summaryPath);
+      if (partials.task && !result.task) {
+        result.task = partials.task;
+      }
+      for (const f of partials.files) {
+        if (!result.files.includes(f)) result.files.push(f);
+      }
+      result.operations.push(...partials.operations);
+    }
+
+    return result;
+  }
+
+  /** Build entity descriptions for the focus event's three dimensions. */
+  private async buildEntityDescriptions(
+    mgr: EventIndexManager,
+    event: EventDocument,
+  ): Promise<string | undefined> {
+    const dims: Array<["subject" | "type" | "scenario", string]> = [
+      ["subject", event.attributes.subject],
+      ["type", event.attributes.type],
+      ["scenario", event.attributes.scenario],
+    ];
+
     const parts: string[] = [];
-
-    if (s.memory.task) {
-      parts.push(`Current task: ${s.memory.task}`);
-    }
-    if (s.memory.files.length > 0) {
-      parts.push(`Tracked files: ${s.memory.files.join(", ")}`);
-    }
-    if (s.memory.notes.length > 0) {
-      parts.push("Working memory:");
-      for (const note of s.memory.notes) {
-        parts.push(`- ${note}`);
+    for (const [dim, name] of dims) {
+      const entity = mgr.getEntity(dim, name);
+      if (entity && entity.description) {
+        parts.push(`### ${dim.charAt(0).toUpperCase() + dim.slice(1)}: ${name}`);
+        parts.push(entity.description);
       }
     }
 
     return parts.length > 0 ? parts.join("\n") : undefined;
+  }
+
+  /** Build Layer 2: recent event summaries. */
+  private async buildRecentEvents(sessionId: string): Promise<string | undefined> {
+    let mgr: EventIndexManager;
+    try {
+      mgr = this.getEventManager(sessionId);
+    } catch {
+      return undefined;
+    }
+
+    const allEvents = mgr.getAllEvents();
+    if (allEvents.length === 0) return undefined;
+
+    const focusEvent = this.resolveFocusEvent(sessionId);
+    const recentCount = this.config.recentEventCount;
+
+    // Sort by lastUpdated, exclude focus event
+    const recent = allEvents
+      .filter((e) => !focusEvent || e.id !== focusEvent.id)
+      .sort((a, b) => b.lastUpdated - a.lastUpdated)
+      .slice(0, recentCount);
+
+    if (recent.length === 0) return undefined;
+
+    const parts: string[] = ["## Recent Events"];
+    for (const evt of recent) {
+      const narrativeTail = evt.narrative.slice(-500);
+      const sourcesStr = evt.sources
+        .slice(-2)
+        .map((s) => s.summaryPath)
+        .join(", ");
+      parts.push("");
+      parts.push(`- [[${evt.id}]] ${evt.title} (${evt.status})`);
+      parts.push(`  ${this.clip(narrativeTail.replace(/\n/g, " "), 200)}`);
+      if (sourcesStr) {
+        parts.push(`  Sources: ${sourcesStr}`);
+      }
+    }
+
+    return parts.join("\n");
   }
 
   // ── compact ─────────────────────────────────────────────────────
@@ -376,27 +470,30 @@ export class SmartContextEngine {
       return { ok: true, compacted: false, reason: "session filtered" };
     }
     const s = this.state(params.sessionId);
-    const budget = params.tokenBudget
-      ? Math.floor(params.tokenBudget * 4)
-      : this.config.maxHistoryChars;
+    const budgetChars = params.tokenBudget
+      ? params.tokenBudget * CHARS_PER_TOKEN
+      : this.config.maxHistoryTokens * CHARS_PER_TOKEN;
 
     let totalChars = this.totalActiveChars(s);
 
-    if (totalChars <= budget && !params.force) {
+    if (totalChars <= budgetChars && !params.force) {
       return { ok: true, compacted: false, reason: "within budget" };
     }
 
-    const tokensBefore = Math.ceil(totalChars / 4);
+    const tokensBefore = Math.ceil(totalChars / CHARS_PER_TOKEN);
     const eventMgr = this.getEventManager(params.sessionId);
 
+    const coreChars = this.config.compactCoreTokens * CHARS_PER_TOKEN;
+    const overlapChars = this.config.compactOverlapTokens * CHARS_PER_TOKEN;
+
     // Compress windows until within budget
-    while (totalChars > budget) {
+    while (totalChars > budgetChars) {
       if (s.activeEnd >= s.messages.length) break; // All compressed
 
       const window = this.compactor.buildWindow(
         s.messages,
         s.activeEnd,
-        { coreChars: this.config.compactCoreChars, overlapChars: this.config.compactOverlapChars },
+        { coreChars, overlapChars },
       );
 
       if (window.coreMessages.length === 0) break;
@@ -433,21 +530,11 @@ export class SmartContextEngine {
       s.activeEnd = window.coreEndIdx;
 
       // Extract events from the summary
-      let eventSummaries: EventSummary[];
-      if (this.summarizer) {
-        // With LLM: parse the compressed output for events
-        eventSummaries = extractEventsStructural(
-          window.coreMessages,
-          compressed.storagePath,
-          [window.coreStartIdx, window.coreEndIdx],
-        );
-      } else {
-        eventSummaries = extractEventsStructural(
-          window.coreMessages,
-          compressed.storagePath,
-          [window.coreStartIdx, window.coreEndIdx],
-        );
-      }
+      const eventSummaries = extractEventsStructural(
+        window.coreMessages,
+        compressed.storagePath,
+        [window.coreStartIdx, window.coreEndIdx],
+      );
 
       // Process events through the index
       if (eventSummaries.length > 0) {
@@ -460,15 +547,7 @@ export class SmartContextEngine {
       totalChars = this.totalActiveChars(s);
     }
 
-    const tokensAfter = Math.ceil(totalChars / 4);
-
-    if (!params.force && totalChars <= budget) {
-      return {
-        ok: true,
-        compacted: true,
-        result: { tokensBefore, tokensAfter },
-      };
-    }
+    const tokensAfter = Math.ceil(totalChars / CHARS_PER_TOKEN);
 
     return {
       ok: true,

@@ -167,6 +167,30 @@ export class EventStorage {
       return [];
     }
   }
+
+  /** Read a summary file and extract sections for event context. */
+  async readSummaryPartials(
+    sessionId: string,
+    relPath: string,
+  ): Promise<SummaryPartials> {
+    try {
+      const absPath = this.storage.resolvePath(sessionId, relPath);
+      const raw = await readFile(absPath, "utf-8");
+      return parseSummaryPartials(raw);
+    } catch {
+      return { task: "", files: [], operations: [] };
+    }
+  }
+
+  /** Read full summary content from disk. */
+  async readSummaryContent(sessionId: string, relPath: string): Promise<string> {
+    try {
+      const absPath = this.storage.resolvePath(sessionId, relPath);
+      return await readFile(absPath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
 }
 
 // ── Parse helpers ──────────────────────────────────────────────────
@@ -240,6 +264,48 @@ function parseEntityDocument(raw: string): EntityDocument {
     createdAt: meta.created ? Date.parse(meta.created) : Date.now(),
     lastUpdated: meta.lastUpdated ? Date.parse(meta.lastUpdated) : Date.now(),
   };
+}
+
+export type SummaryPartials = {
+  task: string;
+  files: string[];
+  operations: Array<{ op: string; target: string; result: string }>;
+};
+
+function parseSummaryPartials(raw: string): SummaryPartials {
+  const result: SummaryPartials = { task: "", files: [], operations: [] };
+
+  // Extract task
+  const taskMatch = raw.match(/## Task Intent\s*\n([\s\S]*?)(?=\n## |\n$)/);
+  if (taskMatch) {
+    result.task = taskMatch[1].replace(/^-\s*/gm, "").trim();
+  }
+
+  // Extract files from "File Changes" section
+  const fileMatch = raw.match(/## File Changes\s*\n([\s\S]*?)(?=\n## |\n$)/);
+  if (fileMatch) {
+    for (const line of fileMatch[1].split("\n")) {
+      const m = line.match(/^-\s*(.+)$/);
+      if (m) result.files.push(m[1].trim());
+    }
+  }
+
+  // Extract operations from table
+  const opSection = raw.match(/## Operations\s*\n([\s\S]*?)(?=\n## |\n$)/);
+  if (opSection) {
+    const rows = opSection[1].matchAll(/\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|/g);
+    for (const m of rows) {
+      const op = m[1].trim();
+      if (op === "Operation" || op.startsWith("-")) continue;
+      result.operations.push({
+        op,
+        target: m[2].trim(),
+        result: m[3].trim(),
+      });
+    }
+  }
+
+  return result;
 }
 
 function escapeTable(s: string): string {

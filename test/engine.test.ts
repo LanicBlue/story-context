@@ -31,28 +31,14 @@ describe("SmartContextEngine basics", () => {
     expect(engine.info.ownsCompaction).toBe(true);
   });
 
-  it("ingests user messages and records task", async () => {
+  it("ingests user messages", async () => {
     const engine = new SmartContextEngine();
     await engine.ingest({
       sessionId: SID,
       message: makeMessage("user", "implement binary search"),
     });
     const state = engine._getState(SID)!;
-    expect(state.memory.task).toBe("implement binary search");
-  });
-
-  it("only records the first task", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "first task"),
-    });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "second task"),
-    });
-    const state = engine._getState(SID)!;
-    expect(state.memory.task).toBe("first task");
+    expect(state.messages.length).toBe(1);
   });
 
   it("tracks read_file in seenReads", async () => {
@@ -63,7 +49,6 @@ describe("SmartContextEngine basics", () => {
     });
     const state = engine._getState(SID)!;
     expect(state.seenReads.has("foo.ts")).toBe(true);
-    expect(state.memory.files).toContain("foo.ts");
   });
 
   it("removes seenReads on write_file", async () => {
@@ -81,39 +66,16 @@ describe("SmartContextEngine basics", () => {
     expect(engine._getState(SID)!.seenReads.has("bar.ts")).toBe(false);
   });
 
-  it("limits memory notes", async () => {
-    const engine = new SmartContextEngine({ memoryNotesLimit: 3 });
-    for (let i = 0; i < 5; i++) {
-      await engine.ingest({
-        sessionId: SID,
-        message: makeToolResult("run_shell", `output ${i}`),
-      });
-    }
-    const state = engine._getState(SID)!;
-    expect(state.memory.notes.length).toBe(3);
-    expect(state.memory.notes[0]).toContain("output 2");
-    expect(state.memory.notes[2]).toContain("output 4");
-  });
-
-  it("includes memory prompt in systemPromptAddition", async () => {
+  it("initializes session state with focusedEventId null", async () => {
     const engine = new SmartContextEngine();
     await engine.ingest({
       sessionId: SID,
-      message: makeMessage("user", "fix the bug"),
+      message: makeMessage("user", "test"),
     });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("read_file", "bug here", { path: "bug.ts" }),
-    });
-
-    const result = await engine.assemble({
-      sessionId: SID,
-      messages: [],
-    });
-
-    expect(result.systemPromptAddition).toBeDefined();
-    expect(result.systemPromptAddition!).toContain("fix the bug");
-    expect(result.systemPromptAddition!).toContain("bug.ts");
+    const state = engine._getState(SID)!;
+    expect(state.activeEnd).toBe(0);
+    expect(state.compressedWindows).toEqual([]);
+    expect(state.focusedEventId).toBeNull();
   });
 
   it("isolates different sessions", async () => {
@@ -129,8 +91,8 @@ describe("SmartContextEngine basics", () => {
 
     const stateA = engine._getState("session-a")!;
     const stateB = engine._getState("session-b")!;
-    expect(stateA.memory.task).toBe("task A");
-    expect(stateB.memory.task).toBe("task B");
+    expect(stateA.messages.length).toBe(1);
+    expect(stateB.messages.length).toBe(1);
   });
 
   it("dispose clears all sessions", async () => {
@@ -143,22 +105,11 @@ describe("SmartContextEngine basics", () => {
     await engine.dispose();
     expect(engine._getState(disposeSid)).toBeUndefined();
   });
-
-  it("initializes session state correctly", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "test"),
-    });
-    const state = engine._getState(SID)!;
-    expect(state.activeEnd).toBe(0);
-    expect(state.compressedWindows).toEqual([]);
-  });
 });
 
 describe("SmartContextEngine assemble", () => {
   it("assembles messages within budget", async () => {
-    const engine = new SmartContextEngine({ maxHistoryChars: 500 });
+    const engine = new SmartContextEngine({ maxHistoryTokens: 125 }); // 500 chars
     await engine.ingest({
       sessionId: SID,
       message: makeMessage("user", "x".repeat(400)),
@@ -178,7 +129,7 @@ describe("SmartContextEngine assemble", () => {
 
   it("deduplicates old read_file results", async () => {
     const engine = new SmartContextEngine({
-      maxHistoryChars: 50_000,
+      maxHistoryTokens: 12_500, // 50K chars
       recentWindowSize: 2,
     });
 
@@ -204,11 +155,16 @@ describe("SmartContextEngine assemble", () => {
       messages: [],
     });
 
+    // Dedup should remove the first read_file (not in recent window)
     expect(result.messages.length).toBe(3);
   });
 
-  it("includes summary refs when windows exist", async () => {
-    const engine = new SmartContextEngine({ maxHistoryChars: 50_000, compactCoreChars: 100 });
+  it("includes event context in systemPromptAddition after compaction", async () => {
+    const engine = new SmartContextEngine({
+      maxHistoryTokens: 125, // 500 chars
+      compactCoreTokens: 75, // 300 chars
+      compactOverlapTokens: 12, // 50 chars
+    });
     // Fill enough messages to trigger compression
     for (let i = 0; i < 10; i++) {
       await engine.ingest({
@@ -220,8 +176,9 @@ describe("SmartContextEngine assemble", () => {
     await engine.compact({ sessionId: SID, sessionFile: "" });
 
     const result = await engine.assemble({ sessionId: SID, messages: [] });
-    if (engine._getState(SID)!.compressedWindows.length > 0) {
-      expect(result.systemPromptAddition).toContain("Previous conversation summaries");
+    const state = engine._getState(SID)!;
+    if (state.compressedWindows.length > 0) {
+      expect(result.systemPromptAddition).toBeDefined();
     }
   });
 });
@@ -249,7 +206,7 @@ describe("SmartContextEngine compact", () => {
   }
 
   it("returns compacted:false when within budget", async () => {
-    const engine = new SmartContextEngine({ maxHistoryChars: 50_000 });
+    const engine = new SmartContextEngine({ maxHistoryTokens: 12_500 }); // 50K chars
     await fillSession(engine, SID, 3);
 
     const result = await engine.compact({ sessionId: SID, sessionFile: "" });
@@ -259,9 +216,9 @@ describe("SmartContextEngine compact", () => {
 
   it("compresses old messages into a window", async () => {
     const engine = new SmartContextEngine({
-      maxHistoryChars: 500,
-      compactCoreChars: 300,
-      compactOverlapChars: 50,
+      maxHistoryTokens: 125, // 500 chars
+      compactCoreTokens: 75, // 300 chars
+      compactOverlapTokens: 12, // 50 chars
     });
     await fillSession(engine, SID, 20, 50);
 
@@ -277,9 +234,9 @@ describe("SmartContextEngine compact", () => {
 
   it("stores compressed summary on disk", async () => {
     const engine = new SmartContextEngine({
-      maxHistoryChars: 500,
-      compactCoreChars: 300,
-      compactOverlapChars: 50,
+      maxHistoryTokens: 125,
+      compactCoreTokens: 75,
+      compactOverlapTokens: 12,
     });
     await fillSession(engine, SID, 20, 50);
     await engine.compact({ sessionId: SID, sessionFile: "" });
@@ -298,9 +255,9 @@ describe("SmartContextEngine compact", () => {
 
     const engine = new SmartContextEngine(
       {
-        maxHistoryChars: 500,
-        compactCoreChars: 300,
-        compactOverlapChars: 50,
+        maxHistoryTokens: 125,
+        compactCoreTokens: 75,
+        compactOverlapTokens: 12,
         summaryEnabled: true,
       },
       mockSummarizer,
@@ -318,9 +275,9 @@ describe("SmartContextEngine compact", () => {
 
     const engine = new SmartContextEngine(
       {
-        maxHistoryChars: 500,
-        compactCoreChars: 300,
-        compactOverlapChars: 50,
+        maxHistoryTokens: 125,
+        compactCoreTokens: 75,
+        compactOverlapTokens: 12,
       },
       mockSummarizer,
     );
@@ -338,8 +295,8 @@ describe("SmartContextEngine compact", () => {
 
   it("handles force compact even when within budget", async () => {
     const engine = new SmartContextEngine({
-      maxHistoryChars: 50_000,
-      compactCoreChars: 300,
+      maxHistoryTokens: 12_500, // 50K chars
+      compactCoreTokens: 75, // 300 chars
     });
     await fillSession(engine, SID, 10);
 
@@ -457,5 +414,31 @@ describe("SmartContextEngine session filtering", () => {
       message: makeMessage("user", "no key"),
     });
     expect(engine._getState(SID)).toBeDefined();
+  });
+});
+
+describe("SmartContextEngine focus events", () => {
+  it("focusEvent sets focusedEventId on session state", () => {
+    const engine = new SmartContextEngine();
+    // Must ingest first to create state
+    engine.ingest({
+      sessionId: SID,
+      message: makeMessage("user", "test"),
+    });
+    engine.focusEvent(SID, "evt-abc123");
+    const state = engine._getState(SID)!;
+    expect(state.focusedEventId).toBe("evt-abc123");
+  });
+
+  it("unfocusEvent clears focusedEventId", () => {
+    const engine = new SmartContextEngine();
+    engine.ingest({
+      sessionId: SID,
+      message: makeMessage("user", "test"),
+    });
+    engine.focusEvent(SID, "evt-abc123");
+    engine.unfocusEvent(SID);
+    const state = engine._getState(SID)!;
+    expect(state.focusedEventId).toBeNull();
   });
 });

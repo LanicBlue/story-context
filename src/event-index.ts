@@ -141,10 +141,21 @@ export class EventIndexManager {
   }
 
   private searchCandidates(attrs: { subject: string; type: string; scenario: string }): EventDocument[] {
+    // Build a safe FTS5 query by quoting each term
+    const terms = [attrs.subject, attrs.type, attrs.scenario]
+      .filter((t) => t && t.length > 0)
+      .map((t) => `"${t.replace(/"/g, "")}"`)
+      .join(" ");
+
     // Try FTS5 first for broad match
-    const rows = this.db.prepare(`
-      SELECT id FROM events_fts WHERE events_fts MATCH ? LIMIT 20
-    `).all(`${attrs.subject} ${attrs.type} ${attrs.scenario}`) as Array<{ id: string }>;
+    let rows: Array<{ id: string }>;
+    try {
+      rows = this.db.prepare(`
+        SELECT id FROM events_fts WHERE events_fts MATCH ? LIMIT 20
+      `).all(terms) as Array<{ id: string }>;
+    } catch {
+      rows = [];
+    }
 
     const results: EventDocument[] = [];
     for (const row of rows) {
