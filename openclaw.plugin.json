@@ -8,26 +8,36 @@
       "enabled": {
         "type": "boolean"
       },
-      "maxHistoryChars": {
+      "maxHistoryTokens": {
         "type": "integer",
         "minimum": 1000,
-        "description": "Maximum character budget for assembled context (default 12000)"
+        "description": "Maximum token budget for active messages before compaction triggers (default 16000)"
       },
       "dedupReads": {
         "type": "boolean",
         "description": "Deduplicate repeated read_file results for the same path (default true)"
       },
-      "memoryNotesLimit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 20,
-        "description": "Maximum number of working memory notes to retain (default 5)"
-      },
       "recentWindowSize": {
         "type": "integer",
         "minimum": 2,
         "maximum": 20,
-        "description": "Number of recent messages that get higher detail budgets (default 6)"
+        "description": "Number of recent messages that skip dedup (default 6)"
+      },
+      "compactCoreTokens": {
+        "type": "integer",
+        "minimum": 1000,
+        "description": "Token size of each compression window (default 6000)"
+      },
+      "compactOverlapTokens": {
+        "type": "integer",
+        "minimum": 100,
+        "description": "Token size of overlap between compression windows (default 1000)"
+      },
+      "recentEventCount": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Number of recent events to include in context (default 10)"
       },
       "summaryEnabled": {
         "type": "boolean",
@@ -124,6 +134,13 @@
             }
           }
         }
+      },
+      "sessionFilter": {
+        "description": "Which sessions to process: 'main' (default), 'all', or array of regex patterns matching session keys",
+        "oneOf": [
+          { "type": "string", "enum": ["main", "all"] },
+          { "type": "array", "items": { "type": "string" } }
+        ]
       }
     }
   }

@@ -529,11 +529,13 @@ export class SmartContextEngine {
       s.compressedWindows.push(compressed);
       s.activeEnd = window.coreEndIdx;
 
-      // Extract events from the summary
+      // Extract events from the summary (with known dimensions for reuse)
+      const knownDimensions = eventMgr.getKnownDimensions();
       const eventSummaries = extractEventsStructural(
         window.coreMessages,
         compressed.storagePath,
         [window.coreStartIdx, window.coreEndIdx],
+        knownDimensions.subjects.length > 0 ? knownDimensions : undefined,
       );
 
       // Process events through the index

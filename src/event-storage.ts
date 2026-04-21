@@ -134,7 +134,8 @@ export class EventStorage {
 
     const content = serializeFrontmatter(meta, body);
     const dir = `${doc.dimension}s`; // subjects/ types/ scenarios/
-    const absPath = this.storage.resolvePath(sessionId, `${dir}/${doc.name}.md`);
+    const safeName = sanitizeFilename(doc.name);
+    const absPath = this.storage.resolvePath(sessionId, `${dir}/${safeName}.md`);
     await mkdir(join(absPath, ".."), { recursive: true });
     await writeFile(absPath, content, "utf-8");
   }
@@ -147,7 +148,7 @@ export class EventStorage {
   ): Promise<EntityDocument | undefined> {
     try {
       const dir = `${dimension}s`;
-      const absPath = this.storage.resolvePath(sessionId, `${dir}/${name}.md`);
+      const absPath = this.storage.resolvePath(sessionId, `${dir}/${sanitizeFilename(name)}.md`);
       const raw = await readFile(absPath, "utf-8");
       return parseEntityDocument(raw);
     } catch {
@@ -310,4 +311,13 @@ function parseSummaryPartials(raw: string): SummaryPartials {
 
 function escapeTable(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+/** Sanitize a string for use as a filename: replace unsafe chars with underscores. */
+function sanitizeFilename(name: string): string {
+  return name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 100);
 }

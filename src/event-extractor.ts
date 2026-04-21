@@ -89,17 +89,24 @@ function extractSection(text: string, heading: string): string | undefined {
 
 // ── Structural Fallback (No LLM) ──────────────────────────────────
 
+export type KnownDimensions = {
+  subjects: string[];
+  types: string[];
+  scenarios: string[];
+};
+
 /** Extract events structurally from messages without LLM. */
 export function extractEventsStructural(
   coreMessages: unknown[],
   sourceSummary: string,
   messageRange: [number, number],
+  knownDimensions?: KnownDimensions,
 ): EventSummary[] {
   // Group messages into event segments by detecting topic boundaries
   const segments = detectEventSegments(coreMessages);
 
   return segments.map((seg) => {
-    const attrs = extractAttributesFromSegment(seg.messages);
+    const attrs = extractAttributesFromSegment(seg.messages, knownDimensions);
     const content = buildContentFromSegment(seg.messages);
 
     return {
@@ -151,7 +158,7 @@ function detectEventSegments(messages: unknown[]): MessageSegment[] {
   return segments.filter((s) => s.messages.length > 0);
 }
 
-function extractAttributesFromSegment(messages: unknown[]): EventAttributes {
+function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensions): EventAttributes {
   const files = new Set<string>();
   let hasWrite = false;
   let hasShellError = false;
@@ -175,33 +182,82 @@ function extractAttributesFromSegment(messages: unknown[]): EventAttributes {
     }
   }
 
-  // Subject: project name or primary file directory
+  // Collect all text for matching
+  const allText = [
+    ...[...files],
+    userText,
+    ...[...messages].map((m) => extractText(m)),
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  // Subject: match against known values first
   let subject = "未知";
-  if (files.size > 0) {
-    const paths = [...files];
-    const commonDir = extractCommonPrefix(paths);
-    subject = commonDir || paths[0].split("/")[0] || "未知";
-  } else if (userText) {
-    subject = userText.slice(0, 30).replace(/\n/g, " ").trim();
+  if (known && known.subjects.length > 0) {
+    subject = matchKnown(allText, known.subjects) ?? inferSubject(files, userText);
+  } else {
+    subject = inferSubject(files, userText);
   }
 
-  // Type: infer from message patterns
+  // Type: match against known values first
   let type = "对话";
-  if (hasWrite) type = "软件开发";
-  else if (hasShellError) type = "故障排查";
-  else if (files.size > 0) type = "调研";
+  if (known && known.types.length > 0) {
+    type = matchKnown(allText, known.types) ?? inferType(hasWrite, hasShellError, files.size);
+  } else {
+    type = inferType(hasWrite, hasShellError, files.size);
+  }
 
-  // Scenario: infer from file paths and keywords
+  // Scenario: match against known values first
   let scenario = "通用";
-  if (files.size > 0) {
-    const allPaths = [...files].join(" ");
-    if (/test|spec/i.test(allPaths)) scenario = "测试";
-    else if (/config|setup/i.test(allPaths)) scenario = "配置";
-    else if (/deploy|ci|cd/i.test(allPaths)) scenario = "部署";
-    else scenario = "开发环境";
+  if (known && known.scenarios.length > 0) {
+    scenario = matchKnown(allText, known.scenarios) ?? inferScenario(files);
+  } else {
+    scenario = inferScenario(files);
   }
 
   return { subject, type, scenario };
+}
+
+/** Find the best-matching known value by checking substring overlap. */
+function matchKnown(text: string, knownValues: string[]): string | undefined {
+  const textLower = text.toLowerCase();
+  for (const v of knownValues) {
+    // Exact substring match in conversation text
+    if (textLower.includes(v.toLowerCase())) return v;
+    // Also check if the known value contains key tokens from the text
+    const tokens = v.toLowerCase().split(/\s+/);
+    if (tokens.length > 1 && tokens.every((t) => t.length > 2 && textLower.includes(t))) return v;
+  }
+  return undefined;
+}
+
+function inferSubject(files: Set<string>, userText: string): string {
+  if (files.size > 0) {
+    const paths = [...files];
+    const commonDir = extractCommonPrefix(paths);
+    return commonDir || paths[0].split("/")[0] || "未知";
+  }
+  if (userText) {
+    return userText.slice(0, 30).replace(/\n/g, " ").trim();
+  }
+  return "未知";
+}
+
+function inferType(hasWrite: boolean, hasShellError: boolean, fileCount: number): string {
+  if (hasWrite) return "软件开发";
+  if (hasShellError) return "故障排查";
+  if (fileCount > 0) return "调研";
+  return "对话";
+}
+
+function inferScenario(files: Set<string>): string {
+  if (files.size > 0) {
+    const allPaths = [...files].join(" ");
+    if (/test|spec/i.test(allPaths)) return "测试";
+    if (/config|setup/i.test(allPaths)) return "配置";
+    if (/deploy|ci|cd/i.test(allPaths)) return "部署";
+    return "开发环境";
+  }
+  return "通用";
+}
 }
 
 function extractCommonPrefix(paths: string[]): string {

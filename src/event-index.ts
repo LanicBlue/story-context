@@ -99,7 +99,7 @@ export class EventIndexManager {
   /** Process extracted event summaries: match, create/update events, update entities. */
   async processSummaries(summaries: EventSummary[]): Promise<void> {
     for (const summary of summaries) {
-      const match = await this.findMatch(summary);
+      const match = this.findMatch(summary);
 
       if (match) {
         await this.updateEvent(match, summary);
@@ -109,99 +109,18 @@ export class EventIndexManager {
     }
   }
 
-  /** Find an existing event that matches all three dimensions semantically. */
-  private async findMatch(summary: EventSummary): Promise<EventDocument | undefined> {
-    const candidates = this.searchCandidates(summary.attributes);
-
-    if (candidates.length === 0) return undefined;
-
-    // If we have an LLM, use semantic matching
-    if (this.summarizer) {
-      for (const candidate of candidates) {
-        const isMatch = await this.semanticMatch(
-          candidate.attributes,
-          summary.attributes,
-        );
-        if (isMatch) return candidate;
-      }
-      return undefined;
-    }
-
-    // Fallback: exact match on all three dimensions
-    for (const candidate of candidates) {
+  /** Find an existing event that matches all three dimensions exactly. */
+  private findMatch(summary: EventSummary): EventDocument | undefined {
+    for (const doc of this.index.documents.values()) {
       if (
-        candidate.attributes.subject === summary.attributes.subject &&
-        candidate.attributes.type === summary.attributes.type &&
-        candidate.attributes.scenario === summary.attributes.scenario
+        doc.attributes.subject === summary.attributes.subject &&
+        doc.attributes.type === summary.attributes.type &&
+        doc.attributes.scenario === summary.attributes.scenario
       ) {
-        return candidate;
+        return doc;
       }
     }
     return undefined;
-  }
-
-  private searchCandidates(attrs: { subject: string; type: string; scenario: string }): EventDocument[] {
-    // Build a safe FTS5 query by quoting each term
-    const terms = [attrs.subject, attrs.type, attrs.scenario]
-      .filter((t) => t && t.length > 0)
-      .map((t) => `"${t.replace(/"/g, "")}"`)
-      .join(" ");
-
-    // Try FTS5 first for broad match
-    let rows: Array<{ id: string }>;
-    try {
-      rows = this.db.prepare(`
-        SELECT id FROM events_fts WHERE events_fts MATCH ? LIMIT 20
-      `).all(terms) as Array<{ id: string }>;
-    } catch {
-      rows = [];
-    }
-
-    const results: EventDocument[] = [];
-    for (const row of rows) {
-      const doc = this.index.documents.get(row.id);
-      if (doc) results.push(doc);
-    }
-
-    // If FTS returns nothing, scan in-memory index
-    if (results.length === 0) {
-      for (const doc of this.index.documents.values()) {
-        if (
-          doc.attributes.subject === attrs.subject ||
-          doc.attributes.type === attrs.type ||
-          doc.attributes.scenario === attrs.scenario
-        ) {
-          results.push(doc);
-        }
-      }
-    }
-
-    return results;
-  }
-
-  private async semanticMatch(
-    existing: { subject: string; type: string; scenario: string },
-    incoming: { subject: string; type: string; scenario: string },
-  ): Promise<boolean> {
-    if (!this.summarizer) return false;
-
-    try {
-      const prompt = `Determine whether the attributes of these two events semantically match. Values expressing the same concept with different wording also count as matching.
-Event A: subject="${existing.subject}", type="${existing.type}", scenario="${existing.scenario}"
-Event B: subject="${incoming.subject}", type="${incoming.type}", scenario="${incoming.scenario}"
-Output JSON only: {"subject": true/false, "type": true/false, "scenario": true/false}`;
-
-      const response = await this.summarizer.summarize(prompt, 100);
-      const parsed = JSON.parse(response);
-      return parsed.subject === true && parsed.type === true && parsed.scenario === true;
-    } catch {
-      // Fallback to exact match
-      return (
-        existing.subject === incoming.subject &&
-        existing.type === incoming.type &&
-        existing.scenario === incoming.scenario
-      );
-    }
   }
 
   // ── Create / Update Events ───────────────────────────────────────
@@ -365,6 +284,23 @@ Output JSON only: {"subject": true/false, "type": true/false, "scenario": true/f
     return this.getAllEvents()
       .filter((e) => e.status === "active")
       .sort((a, b) => b.lastUpdated - a.lastUpdated);
+  }
+
+  /** Get distinct known values for each dimension. */
+  getKnownDimensions(): { subjects: string[]; types: string[]; scenarios: string[] } {
+    const subjects = new Set<string>();
+    const types = new Set<string>();
+    const scenarios = new Set<string>();
+    for (const doc of this.index.documents.values()) {
+      subjects.add(doc.attributes.subject);
+      types.add(doc.attributes.type);
+      scenarios.add(doc.attributes.scenario);
+    }
+    return {
+      subjects: [...subjects],
+      types: [...types],
+      scenarios: [...scenarios],
+    };
   }
 
   /** Get all events for an entity. */
