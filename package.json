@@ -1,0 +1,40 @@
+{
+  "name": "smart-context",
+  "version": "0.1.0",
+  "description": "Smart Context Engine plugin for OpenClaw — dedup-aware sliding window with working memory",
+  "type": "module",
+  "main": "dist/index.js",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "context-engine",
+    "context-management"
+  ],
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --external:openclaw --external:\"@mariozechner/*\" --minify-whitespace",
+    "test": "vitest run --dir test"
+  },
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
+}

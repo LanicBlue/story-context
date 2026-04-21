@@ -1,0 +1,130 @@
+{
+  "id": "smart-context",
+  "kind": "context-engine",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "maxHistoryChars": {
+        "type": "integer",
+        "minimum": 1000,
+        "description": "Maximum character budget for assembled context (default 12000)"
+      },
+      "dedupReads": {
+        "type": "boolean",
+        "description": "Deduplicate repeated read_file results for the same path (default true)"
+      },
+      "memoryNotesLimit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "Maximum number of working memory notes to retain (default 5)"
+      },
+      "recentWindowSize": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 20,
+        "description": "Number of recent messages that get higher detail budgets (default 6)"
+      },
+      "summaryEnabled": {
+        "type": "boolean",
+        "description": "Enable LLM-based summarization in compact() (default false)"
+      },
+      "summaryMode": {
+        "type": "string",
+        "enum": ["runtime", "http"],
+        "description": "Summarizer mode: 'runtime' uses OpenClaw's model config, 'http' calls an OpenAI-compatible API directly (default runtime)"
+      },
+      "summaryModel": {
+        "type": "string",
+        "description": "Model name for summarization. In runtime mode, empty = use OpenClaw's default model. In http mode, default = qwen2.5"
+      },
+      "summaryBaseUrl": {
+        "type": "string",
+        "description": "Base URL for http mode (OpenAI-compatible API). Default: http://localhost:11434/v1"
+      },
+      "summaryApiKey": {
+        "type": "string",
+        "description": "API key for http mode (optional, not needed for local Ollama)"
+      },
+      "summaryTargetTokens": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 4000,
+        "description": "Target token count for generated summaries (default 600)"
+      },
+      "summaryTimeoutMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "maximum": 120000,
+        "description": "HTTP request timeout in milliseconds for http mode (default 30000)"
+      },
+      "summaryCustomInstructions": {
+        "type": "string",
+        "description": "Custom instructions injected into the summarization prompt"
+      },
+      "largeTextThreshold": {
+        "type": "integer",
+        "minimum": 500,
+        "description": "Character threshold above which text is offloaded to disk with outline (default 2000)"
+      },
+      "outlineHeadLines": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Number of leading lines kept verbatim in outline (default 8)"
+      },
+      "outlineTailLines": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Number of trailing lines kept verbatim in outline (default 5)"
+      },
+      "outlineMaxSections": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Maximum section markers in outline (default 20)"
+      },
+      "storageDir": {
+        "type": "string",
+        "description": "Root directory for stored content files (default: system temp dir)"
+      },
+      "outlineSummaryEnabled": {
+        "type": "boolean",
+        "description": "Use LLM to generate enhanced summary for large text outlines (default false)"
+      },
+      "contentFilters": {
+        "type": "array",
+        "description": "Content filter rules. Matching content is excluded from context.",
+        "items": {
+          "type": "object",
+          "required": ["match", "pattern", "granularity"],
+          "properties": {
+            "match": {
+              "type": "string",
+              "enum": ["contains", "regex"],
+              "description": "Matching mode: substring or regex"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "Substring to find or regex pattern"
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "description": "Case-sensitive matching (default false)"
+            },
+            "granularity": {
+              "type": "string",
+              "enum": ["message", "block", "line"],
+              "description": "Filter granularity: message=drop entire message, block=drop matching block, line=remove matching lines only"
+            }
+          }
+        }
+      }
+    }
+  }
+}
