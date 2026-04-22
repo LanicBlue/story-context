@@ -102,7 +102,10 @@ export async function extractEventsWithLLM(
   knownDimensions?: KnownDimensions,
 ): Promise<{ rawOutput: string; events: EventSummary[] }> {
   try {
-    const coreText = prepareCoreText(coreMessages);
+    // Use already-processed message text (metadata stripped, large text outlined)
+    const coreText = coreMessages
+      .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
+      .join("\n\n");
 
     const prompt = EVENT_EXTRACT_USER_TEMPLATE
       .replace("{preOverlap}", preOverlap || "(none)")
@@ -123,67 +126,16 @@ export async function extractEventsWithLLM(
     const fullPrompt = EVENT_EXTRACT_SYSTEM_PROMPT + "\n\n" + prompt + knownHint;
     const rawOutput = await summarizer.summarize(fullPrompt, 2000);
 
-    // Validate: reject output that just echoes raw content
-    if (isEchoOutput(rawOutput)) {
-      const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
-      return { rawOutput, events: structural };
-    }
-
     const events = parseEventOrientedOutput(rawOutput, sourceSummary, messageRange);
 
     if (events.length === 0) {
-      const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
-      return { rawOutput, events: structural };
+      return { rawOutput, events: extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
     }
 
     return { rawOutput, events };
   } catch {
-    const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
-    return { rawOutput: "", events: structural };
+    return { rawOutput: "", events: extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
   }
-}
-
-/** Prepare clean text from messages for LLM consumption. Strips noisy tool results. */
-function prepareCoreText(messages: unknown[]): string {
-  const MAX_MSG_CHARS = 800;
-  const parts: string[] = [];
-
-  for (const msg of messages) {
-    const role = extractRole(msg);
-    const fullText = extractText(msg);
-
-    if (role === "toolResult") {
-      const toolName = extractToolName(msg);
-      const filePath = extractToolArg(msg, "path");
-      // Summarize tool results: tool name + file path + brief result
-      const brief = fullText.replace(/\n/g, " ").trim().slice(0, 120);
-      parts.push(`[${role}] ${toolName}${filePath ? ` ${filePath}` : ""}: ${brief}`);
-    } else {
-      // For user/assistant: truncate long messages
-      const truncated = fullText.length > MAX_MSG_CHARS
-        ? fullText.slice(0, MAX_MSG_CHARS) + "..."
-        : fullText;
-      parts.push(`[${role}]: ${truncated}`);
-    }
-  }
-
-  return parts.join("\n\n");
-}
-
-/** Detect if LLM output is just echoing raw content rather than producing narratives. */
-function isEchoOutput(text: string): boolean {
-  // Too much raw JSON/tool call patterns = echo
-  const jsonBlockCount = (text.match(/```json/g) || []).length;
-  const toolCallCount = (text.match(/\[Tool call:/g) || []).length;
-  const toolResultCount = (text.match(/\[toolResult\]/g) || []).length;
-  const externalContentCount = (text.match(/EXTERNAL_UNTRUSTED_CONTENT/g) || []).length;
-
-  // If more than 30% of lines look like raw data, it's an echo
-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
-  const rawDataLines = jsonBlockCount * 3 + toolCallCount + toolResultCount +
-    externalContentCount * 2 + (text.match(/^\s*[{"]/gm) || []).length;
-
-  return rawDataLines > lines.length * 0.3;
 }
 
 // ── Structural Fallback (No LLM) ──────────────────────────────────

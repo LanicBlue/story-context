@@ -1,18 +1,16 @@
 import type { Summarizer } from "./types.js";
 import type { ContentFilterRule, TextBlock } from "./content-filter.js";
 import { applyContentFilters } from "./content-filter.js";
-import { generateOutline, formatOutline } from "./outline.js";
 import { ContentStorage } from "./content-storage.js";
+
+const PREVIEW_SIZE = 2000;
 
 type InternalBlock = TextBlock & { raw?: unknown };
 
 export type ContentProcessorConfig = {
   largeTextThreshold: number;
-  outlineHeadLines: number;
-  outlineTailLines: number;
-  outlineMaxSections: number;
   contentFilters: ContentFilterRule[];
-  outlineSummaryEnabled: boolean;
+  summaryEnabled: boolean;
 };
 
 export type ProcessedContent = {
@@ -126,27 +124,34 @@ export class ContentProcessor {
     sessionId: string,
   ): Promise<string> {
     const storagePath = await this.storage.storeText(sessionId, text);
-    const outline = generateOutline(text, {
-      headLines: this.config.outlineHeadLines,
-      tailLines: this.config.outlineTailLines,
-      maxSections: this.config.outlineMaxSections,
-    });
 
-    let result = formatOutline(outline, storagePath);
+    const sizeStr = text.length >= 1024
+      ? `${(text.length / 1024).toFixed(1)}KB`
+      : `${text.length} chars`;
+    const lines = text.split("\n").length;
 
-    // Optional LLM summary
-    if (this.config.outlineSummaryEnabled && this.summarizer) {
+    const parts: string[] = [
+      `<persisted-output>`,
+      `Output too large (${sizeStr}, ${lines} lines). Full output saved to: ${storagePath}`,
+      ``,
+      `Preview (first ${PREVIEW_SIZE} chars):`,
+      text.slice(0, PREVIEW_SIZE),
+      `</persisted-output>`,
+    ];
+
+    // LLM summary — concise abstract of the full content
+    if (this.config.summaryEnabled && this.summarizer) {
       try {
         const summary = await this.summarizer.summarize(text, 300);
         if (summary) {
-          result = `--- AI Summary ---\n${summary}\n\n${result}`;
+          parts.splice(1, 0, ``, `--- AI Summary ---`, summary);
         }
       } catch {
-        // LLM summary is best-effort
+        // best-effort
       }
     }
 
-    return result;
+    return parts.join("\n");
   }
 
   private async processMediaBlock(

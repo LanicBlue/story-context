@@ -175,9 +175,23 @@ async function runPipeline(
     maxHistoryTokens: 16_000,
     compactCoreTokens: 6_000,
     compactOverlapTokens: 1_000,
-    largeTextThreshold: 10_000,
+    largeTextThreshold: 4000,
+    outlineSummaryEnabled: true,
     sessionFilter: "all",
     storageDir,
+    contentFilters: [
+      // Drop memory system context injections (no event value)
+      { match: "contains", pattern: "## User's conversation history", granularity: "message" },
+      { match: "contains", pattern: "## Memory system", granularity: "message" },
+      // Drop assistant pure auto-replies
+      { match: "regex", pattern: "^NO_REPLY\\s*$", granularity: "message" },
+      // Strip heartbeat confirmation tokens (keep rest of message)
+      { match: "regex", pattern: "^HEARTBEAT_OK\\s*$", granularity: "line" },
+      { match: "regex", pattern: "^HEARTBEAT_CHECK\\s*$", granularity: "line" },
+      // Strip external content trust wrapper tags
+      { match: "regex", pattern: "^<<<EXTERNAL_UNTRUSTED_CONTENT.*>>>$", granularity: "line" },
+      { match: "regex", pattern: "^<<<END_EXTERNAL_UNTRUSTED_CONTENT.*>>>$", granularity: "line" },
+    ],
   }, summarizer);
 
   const sessionId = "conv-1";

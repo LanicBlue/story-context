@@ -70,11 +70,8 @@ export class SmartContextEngine {
     this.contentProcessor = new ContentProcessor(
       {
         largeTextThreshold: this.config.largeTextThreshold,
-        outlineHeadLines: this.config.outlineHeadLines,
-        outlineTailLines: this.config.outlineTailLines,
-        outlineMaxSections: this.config.outlineMaxSections,
         contentFilters: this.config.contentFilters,
-        outlineSummaryEnabled: this.config.outlineSummaryEnabled,
+        summaryEnabled: this.config.outlineSummaryEnabled,
       },
       this.storage,
       summarizer,
@@ -162,9 +159,16 @@ export class SmartContextEngine {
       return { ingested: true };
     }
     const s = this.state(params.sessionId);
+    const role = extractRole(params.message);
+    let rawContent = (params.message as { content?: unknown }).content;
+
+    // Strip platform metadata from user messages before processing
+    if (role === "user" && typeof rawContent === "string") {
+      rawContent = stripPlatformMetadata(rawContent);
+    }
 
     const processed = await this.contentProcessor.processContent(
-      (params.message as { content?: unknown }).content,
+      rawContent,
       params.sessionId,
     );
 
@@ -178,8 +182,6 @@ export class SmartContextEngine {
       content: processed.contextText,
     };
     s.messages.push(processedMessage);
-
-    const role = extractRole(params.message);
 
     if (role === "toolResult") {
       this.updateSeenReads(s, processedMessage, idx);
@@ -630,6 +632,30 @@ function extractToolArg(msg: unknown, key: string): string {
     return typeof val === "string" ? val : "";
   }
   return "";
+}
+
+/**
+ * Strip OpenClaw platform metadata blocks from user message content.
+ * Removes: Conversation info, Sender, message_id prefix — keeps actual user text.
+ */
+function stripPlatformMetadata(text: string): string {
+  // Strip "Conversation info (untrusted metadata):" + following ```json...``` block
+  let result = text.replace(
+    /Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```/g,
+    "",
+  );
+  // Strip "Sender (untrusted metadata):" + following ```json...``` block
+  result = result.replace(
+    /Sender \(untrusted metadata\):\s*```json[\s\S]*?```/g,
+    "",
+  );
+  // Strip "[message_id: ...]" lines
+  result = result.replace(/^\[message_id:.*\]$/gm, "");
+  // Strip "ou_<hex>:" sender prefix on actual text lines
+  result = result.replace(/^ou_[a-f0-9]+:\s*/gm, "");
+  // Clean up excess blank lines
+  result = result.replace(/\n{3,}/g, "\n\n").trim();
+  return result;
 }
 
 // ── Session key helpers ─────────────────────────────────────────────
