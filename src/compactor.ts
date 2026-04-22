@@ -3,7 +3,7 @@ import { ContentStorage } from "./content-storage.js";
 import { EventStorage } from "./event-storage.js";
 
 const COMPACT_SYSTEM_PROMPT =
-  "You are a conversation compression engine. Categorize conversation content by event elements, output pure Markdown. Only record valuable information; omit conversational filler and repetition.";
+  "You are a conversation compression engine. Categorize conversation content by event elements, output pure Markdown. Only record valuable information; omit conversational filler and repetition. /no_think";
 
 const COMPACT_USER_TEMPLATE = `The following are consecutive conversation segments. Compress the [Core Content] section in the middle.
 

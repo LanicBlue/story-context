@@ -1,33 +1,36 @@
 import type { EventSummary, EventAttributes } from "./event-types.js";
+import type { Summarizer } from "./types.js";
 import { extractText, extractRole, extractToolName, extractToolArg } from "./compactor.js";
 
 // ── LLM Prompt Templates ──────────────────────────────────────────
 
 export const EVENT_EXTRACT_SYSTEM_PROMPT =
-  "You are a conversation compression engine. Decompose the conversation into discrete events. " +
-  "For each event, extract three attribute dimensions, then write an event summary.\n" +
-  "Attribute dimensions:\n" +
-  "- subject: What entity this event is about (project, system, module, concept, person, etc.)\n" +
-  "- type: Event category (software development, investigation, troubleshooting, decision, discussion, deployment, requirement analysis, etc.)\n" +
-  "- scenario: Application context (production, tech selection, client engagement, authentication flow, etc.)\n" +
-  "Output format (one block per event):\n" +
-  "---EVENT---\n## subject\n<value>\n## type\n<value>\n## scenario\n<value>\n## content\n<2-5 sentence narrative>\n---END---\n" +
-  "Rules: one coherent activity = one event; different subject/type/scenario = different events; " +
-  "same dimension can use different expressions (e.g. \"bug fix\" and \"defect repair\" are synonyms); " +
-  "content records decisions and results, omit filler; if the whole segment is one event, output only one block.";
+  "You are a conversation compression engine. /no_think\n" +
+  "Task: Read the conversation and extract events.\n" +
+  "For each event, provide:\n" +
+  "1. subject: the main entity (project name, module, concept, person)\n" +
+  "2. type: activity type (development, investigation, troubleshooting, decision, discussion, deployment, analysis)\n" +
+  "3. scenario: context (production, development, testing, client engagement, configuration)\n" +
+  "4. content: a concise 2-3 sentence narrative describing what happened\n\n" +
+  "IMPORTANT:\n" +
+  "- Write narrative summaries, do NOT copy raw text or JSON from the conversation\n" +
+  "- Each content section must be your own summary of what occurred\n" +
+  "- Omit tool output details, file contents, and API responses\n\n" +
+  "Output format:\n" +
+  "---EVENT---\n## subject\n<value>\n## type\n<value>\n## scenario\n<value>\n## content\n<your narrative summary>\n---END---";
 
-export const EVENT_EXTRACT_USER_TEMPLATE = `The following are consecutive conversation segments. Decompose them into independent events and extract attributes.
+export const EVENT_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract events.
 
-[Preceding Context]
+[Context before]
 {preOverlap}
 
-[Core Content — Decompose into events]
+[Conversation to analyze]
 {core}
 
-[Following Context]
+[Context after]
 {postOverlap}
 
-Output each event using the ---EVENT--- format.`;
+Extract events using the ---EVENT--- format. Write narrative summaries, not raw text.`;
 
 export const SEMANTIC_MATCH_PROMPT =
   "Determine whether the attributes of the following two events semantically match. " +
@@ -46,13 +49,14 @@ export function parseEventOrientedOutput(
   const blocks = markdown.split(/---EVENT---/).filter((b) => b.trim());
 
   for (const block of blocks) {
-    const cleaned = block.replace(/---END---/, "").trim();
+    const cleaned = block.replace(/---END---/g, "").trim();
     const subject = extractSection(cleaned, "subject");
     const type = extractSection(cleaned, "type");
     const scenario = extractSection(cleaned, "scenario");
     const content = extractSection(cleaned, "content");
 
-    if (!content) continue;
+    // Skip events with no meaningful content
+    if (!content || content.trim().length < 10) continue;
 
     events.push({
       content: content.trim(),
@@ -85,6 +89,101 @@ function extractSection(text: string, heading: string): string | undefined {
   const regex = new RegExp(`^##\\s+${heading}\\s*\\n([\\s\\S]*?)(?=^##\\s|$(?!\\n))`, "m");
   const match = regex.exec(text);
   return match?.[1]?.trim();
+}
+
+/** Extract events using LLM, falling back to structural extraction on failure. */
+export async function extractEventsWithLLM(
+  coreMessages: unknown[],
+  preOverlap: string,
+  postOverlap: string,
+  summarizer: Summarizer,
+  sourceSummary: string,
+  messageRange: [number, number],
+  knownDimensions?: KnownDimensions,
+): Promise<{ rawOutput: string; events: EventSummary[] }> {
+  try {
+    const coreText = prepareCoreText(coreMessages);
+
+    const prompt = EVENT_EXTRACT_USER_TEMPLATE
+      .replace("{preOverlap}", preOverlap || "(none)")
+      .replace("{core}", coreText)
+      .replace("{postOverlap}", postOverlap || "(none)");
+
+    let knownHint = "";
+    if (knownDimensions) {
+      const parts: string[] = [];
+      if (knownDimensions.subjects.length > 0) parts.push(`Known subjects: ${knownDimensions.subjects.join(", ")}`);
+      if (knownDimensions.types.length > 0) parts.push(`Known types: ${knownDimensions.types.join(", ")}`);
+      if (knownDimensions.scenarios.length > 0) parts.push(`Known scenarios: ${knownDimensions.scenarios.join(", ")}`);
+      if (parts.length > 0) {
+        knownHint = `\n\nPrefer reusing known dimension values when they fit. ${parts.join(". ")}`;
+      }
+    }
+
+    const fullPrompt = EVENT_EXTRACT_SYSTEM_PROMPT + "\n\n" + prompt + knownHint;
+    const rawOutput = await summarizer.summarize(fullPrompt, 2000);
+
+    // Validate: reject output that just echoes raw content
+    if (isEchoOutput(rawOutput)) {
+      const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
+      return { rawOutput, events: structural };
+    }
+
+    const events = parseEventOrientedOutput(rawOutput, sourceSummary, messageRange);
+
+    if (events.length === 0) {
+      const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
+      return { rawOutput, events: structural };
+    }
+
+    return { rawOutput, events };
+  } catch {
+    const structural = extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions);
+    return { rawOutput: "", events: structural };
+  }
+}
+
+/** Prepare clean text from messages for LLM consumption. Strips noisy tool results. */
+function prepareCoreText(messages: unknown[]): string {
+  const MAX_MSG_CHARS = 800;
+  const parts: string[] = [];
+
+  for (const msg of messages) {
+    const role = extractRole(msg);
+    const fullText = extractText(msg);
+
+    if (role === "toolResult") {
+      const toolName = extractToolName(msg);
+      const filePath = extractToolArg(msg, "path");
+      // Summarize tool results: tool name + file path + brief result
+      const brief = fullText.replace(/\n/g, " ").trim().slice(0, 120);
+      parts.push(`[${role}] ${toolName}${filePath ? ` ${filePath}` : ""}: ${brief}`);
+    } else {
+      // For user/assistant: truncate long messages
+      const truncated = fullText.length > MAX_MSG_CHARS
+        ? fullText.slice(0, MAX_MSG_CHARS) + "..."
+        : fullText;
+      parts.push(`[${role}]: ${truncated}`);
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+/** Detect if LLM output is just echoing raw content rather than producing narratives. */
+function isEchoOutput(text: string): boolean {
+  // Too much raw JSON/tool call patterns = echo
+  const jsonBlockCount = (text.match(/```json/g) || []).length;
+  const toolCallCount = (text.match(/\[Tool call:/g) || []).length;
+  const toolResultCount = (text.match(/\[toolResult\]/g) || []).length;
+  const externalContentCount = (text.match(/EXTERNAL_UNTRUSTED_CONTENT/g) || []).length;
+
+  // If more than 30% of lines look like raw data, it's an echo
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  const rawDataLines = jsonBlockCount * 3 + toolCallCount + toolResultCount +
+    externalContentCount * 2 + (text.match(/^\s*[{"]/gm) || []).length;
+
+  return rawDataLines > lines.length * 0.3;
 }
 
 // ── Structural Fallback (No LLM) ──────────────────────────────────
@@ -257,7 +356,6 @@ function inferScenario(files: Set<string>): string {
     return "开发环境";
   }
   return "通用";
-}
 }
 
 function extractCommonPrefix(paths: string[]): string {

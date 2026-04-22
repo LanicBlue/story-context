@@ -3,7 +3,7 @@ import type { Summarizer } from "./types.js";
 // ── Prompt constants ──────────────────────────────────────────────
 
 const SUMMARY_SYSTEM_PROMPT =
-  "You are a context-compaction summarization engine. Follow user instructions exactly and return plain text summary content only.";
+  "You are a context-compaction summarization engine. Follow user instructions exactly and return plain text summary content only. /no_think";
 
 // ── Shared helpers ────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ export class HttpSummarizer implements Summarizer {
           { role: "system", content: SUMMARY_SYSTEM_PROMPT },
           { role: "user", content: prompt },
         ],
-        max_tokens: targetTokens,
+        max_tokens: targetTokens * 2,
         stream: false,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -156,13 +156,18 @@ export class HttpSummarizer implements Summarizer {
     }
 
     const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string; reasoning?: string } }>;
     };
-    const content = json.choices?.[0]?.message?.content;
+    const msg = json.choices?.[0]?.message;
+    let content = msg?.content?.trim();
+    // Ollama Qwen3: thinking tokens go to reasoning field, content may be empty
+    if (!content && msg?.reasoning) {
+      content = msg.reasoning.trim();
+    }
     if (!content) {
       throw new Error("Empty response from summarizer");
     }
-    return content.trim();
+    return content;
   }
 }
 

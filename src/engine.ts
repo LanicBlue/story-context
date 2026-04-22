@@ -40,7 +40,7 @@ import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
 import { ContentProcessor } from "./content-processor.js";
 import { ContentStorage } from "./content-storage.js";
 import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { extractEventsStructural } from "./event-extractor.js";
+import { extractEventsStructural, extractEventsWithLLM } from "./event-extractor.js";
 import { EventIndexManager } from "./event-index.js";
 import { EventStorage } from "./event-storage.js";
 import type { EventSummary, EventDocument, EntityDocument } from "./event-types.js";
@@ -498,24 +498,48 @@ export class SmartContextEngine {
 
       if (window.coreMessages.length === 0) break;
 
-      // Generate summary
+      // Generate summary + extract events
       let markdown: string;
+      let eventSummaries: EventSummary[];
+      const knownDimensions = eventMgr.getKnownDimensions();
+      const dims = knownDimensions.subjects.length > 0 ? knownDimensions : undefined;
+
       if (this.summarizer) {
+        const coreText = window.coreMessages
+          .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
+          .join("\n\n");
         try {
-          const coreText = window.coreMessages
-            .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
-            .join("\n\n");
-          markdown = await this.compactor.compressWithLLM(
+          // Single LLM call: event-oriented compression
+          const { rawOutput, events: llmEvents } = await extractEventsWithLLM(
+            window.coreMessages,
             window.preOverlap,
-            coreText,
             window.postOverlap,
-            this.config.summaryTargetTokens,
+            this.summarizer,
+            "",
+            [window.coreStartIdx, window.coreEndIdx],
+            dims,
           );
+          // Save raw LLM output as summary file
+          markdown = rawOutput;
+          eventSummaries = llmEvents;
         } catch {
           markdown = this.compactor.buildStructuralSummary(window.coreMessages);
+          eventSummaries = extractEventsStructural(
+            window.coreMessages, "", [window.coreStartIdx, window.coreEndIdx], dims,
+          );
         }
       } else {
         markdown = this.compactor.buildStructuralSummary(window.coreMessages);
+        eventSummaries = extractEventsStructural(
+          window.coreMessages, "", [window.coreStartIdx, window.coreEndIdx], dims,
+        );
+      }
+
+      if (eventSummaries.length === 0 && markdown.trim().length === 0) {
+        // Neither LLM nor structural produced output — skip this window
+        s.activeEnd = window.coreEndIdx;
+        totalChars = this.totalActiveChars(s);
+        continue;
       }
 
       // Save summary to disk
@@ -526,17 +550,11 @@ export class SmartContextEngine {
         window.coreTotalChars,
       );
 
+      // Patch sourceSummary on events
+      eventSummaries = eventSummaries.map((e) => ({ ...e, sourceSummary: compressed.storagePath }));
+
       s.compressedWindows.push(compressed);
       s.activeEnd = window.coreEndIdx;
-
-      // Extract events from the summary (with known dimensions for reuse)
-      const knownDimensions = eventMgr.getKnownDimensions();
-      const eventSummaries = extractEventsStructural(
-        window.coreMessages,
-        compressed.storagePath,
-        [window.coreStartIdx, window.coreEndIdx],
-        knownDimensions.subjects.length > 0 ? knownDimensions : undefined,
-      );
 
       // Process events through the index
       if (eventSummaries.length > 0) {
