@@ -1,7 +1,5 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import type {
   EventSummary,
   EventDocument,
@@ -18,68 +16,17 @@ export class EventIndexManager {
   private readonly index: EventIndex;
 
   constructor(
-    dbPath: string,
+    db: Database.Database,
     private readonly storage: EventStorage,
     private readonly sessionId: string,
     private readonly summarizer?: Summarizer,
   ) {
-    mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.initSchema();
+    this.db = db;
     this.index = {
       documents: new Map(),
       entities: new Map(),
       processedSummaries: new Set(),
     };
-  }
-
-  private initSchema(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        type TEXT NOT NULL,
-        scenario TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        narrative TEXT DEFAULT '',
-        created_at INTEGER NOT NULL,
-        last_updated INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS event_sources (
-        event_id TEXT NOT NULL,
-        summary_path TEXT NOT NULL,
-        msg_start INTEGER NOT NULL,
-        msg_end INTEGER NOT NULL,
-        timestamp INTEGER NOT NULL,
-        snippet TEXT DEFAULT '',
-        FOREIGN KEY (event_id) REFERENCES events(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS entities (
-        dimension TEXT NOT NULL,
-        name TEXT NOT NULL,
-        description TEXT DEFAULT '',
-        created_at INTEGER NOT NULL,
-        last_updated INTEGER NOT NULL,
-        PRIMARY KEY (dimension, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS event_entities (
-        event_id TEXT NOT NULL,
-        dimension TEXT NOT NULL,
-        entity_name TEXT NOT NULL,
-        PRIMARY KEY (event_id, dimension)
-      );
-
-      CREATE TABLE IF NOT EXISTS processed_summaries (
-        path TEXT PRIMARY KEY
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(id, title, subject, type, scenario, narrative);
-    `);
   }
 
   // ── Event ID Generation ──────────────────────────────────────────
@@ -332,8 +279,6 @@ export class EventIndexManager {
     return this.index;
   }
 
-  /** Close the database. */
-  close(): void {
-    this.db.close();
-  }
+  /** No-op: DB lifecycle managed by MessageStore. */
+  close(): void {}
 }

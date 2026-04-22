@@ -1,3 +1,14 @@
+import { resolveConfig, CHARS_PER_TOKEN } from "./config.js";
+import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
+import { ContentProcessor } from "./content-processor.js";
+import { ContentStorage } from "./content-storage.js";
+import { Compactor, extractText as compactorExtractText } from "./compactor.js";
+import { extractEventsStructural, extractEventsWithLLM } from "./event-extractor.js";
+import { EventIndexManager } from "./event-index.js";
+import { EventStorage } from "./event-storage.js";
+import { MessageStore } from "./message-store.js";
+import type { EventSummary, EventDocument, EntityDocument } from "./event-types.js";
+
 // ContextEngine types — openclaw exposes these via the plugin-sdk surface.
 export type AssembleResult = {
   messages: unknown[];
@@ -35,15 +46,6 @@ export type ContextEngineInfo = {
   ownsCompaction?: boolean;
   turnMaintenanceMode?: "foreground" | "background";
 };
-import { resolveConfig, CHARS_PER_TOKEN } from "./config.js";
-import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
-import { ContentProcessor } from "./content-processor.js";
-import { ContentStorage } from "./content-storage.js";
-import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { extractEventsStructural, extractEventsWithLLM } from "./event-extractor.js";
-import { EventIndexManager } from "./event-index.js";
-import { EventStorage } from "./event-storage.js";
-import type { EventSummary, EventDocument, EntityDocument } from "./event-types.js";
 
 export class SmartContextEngine {
   readonly info: ContextEngineInfo = {
@@ -51,6 +53,7 @@ export class SmartContextEngine {
     name: "Smart Context Engine",
     version: "2.0.0",
     ownsCompaction: true,
+    turnMaintenanceMode: "foreground",
   };
 
   private readonly config: SmartContextConfig;
@@ -61,6 +64,7 @@ export class SmartContextEngine {
   private readonly compactor: Compactor;
   private readonly eventManagers = new Map<string, EventIndexManager>();
   private readonly eventStorage: EventStorage;
+  private readonly messageStore: MessageStore;
 
   constructor(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
     this.config = resolveConfig(config);
@@ -71,12 +75,13 @@ export class SmartContextEngine {
       {
         largeTextThreshold: this.config.largeTextThreshold,
         contentFilters: this.config.contentFilters,
-        summaryEnabled: this.config.outlineSummaryEnabled,
+        summaryEnabled: this.config.summaryEnabled,
       },
       this.storage,
       summarizer,
     );
     this.compactor = new Compactor(this.storage, summarizer);
+    this.messageStore = new MessageStore(this.config.storageDir || "");
   }
 
   // ── Session helpers ─────────────────────────────────────────────
@@ -84,6 +89,8 @@ export class SmartContextEngine {
   private state(sessionId: string): SessionState {
     let s = this.sessions.get(sessionId);
     if (!s) {
+      // Try loading from disk (sync — returns null if not found)
+      // Async load is done in bootstrap(); this is a fallback for non-bootstrap paths
       s = {
         messages: [],
         compressedWindows: [],
@@ -96,6 +103,7 @@ export class SmartContextEngine {
           processedSummaries: new Set(),
         },
         activeEvents: [],
+        lastProcessedIdx: 0,
       };
       this.sessions.set(sessionId, s);
     }
@@ -106,13 +114,12 @@ export class SmartContextEngine {
   private shouldProcess(sessionKey?: string): boolean {
     const filter = this.config.sessionFilter;
     if (filter === "all") return true;
-    if (!sessionKey) return true; // No key provided — allow (e.g. testing)
+    if (!sessionKey) return true;
 
     if (filter === "main") {
       return isMainSessionKey(sessionKey);
     }
 
-    // Array of regex patterns
     if (Array.isArray(filter)) {
       return filter.some((pattern) => new RegExp(pattern).test(sessionKey));
     }
@@ -125,8 +132,9 @@ export class SmartContextEngine {
     return text.slice(0, limit) + `\n...[truncated ${text.length - limit} chars]`;
   }
 
+  /** Active messages that haven't been compressed yet, excluding dropped. */
   private activeMessages(s: SessionState): unknown[] {
-    return s.messages.slice(s.activeEnd);
+    return s.messages.slice(s.activeEnd).filter((m) => !isDropped(m));
   }
 
   private totalActiveChars(s: SessionState): number {
@@ -139,15 +147,19 @@ export class SmartContextEngine {
   private getEventManager(sessionId: string): EventIndexManager {
     let mgr = this.eventManagers.get(sessionId);
     if (!mgr) {
-      const dbPath = this.storage.resolvePath(sessionId, "index.db");
+      const db = this.messageStore.getDb(sessionId);
       const eventStorage = this.compactor.getEventStorage();
-      mgr = new EventIndexManager(dbPath, eventStorage, sessionId, this.summarizer);
+      mgr = new EventIndexManager(db, eventStorage, sessionId, this.summarizer);
       this.eventManagers.set(sessionId, mgr);
     }
     return mgr;
   }
 
   // ── ingest ──────────────────────────────────────────────────────
+  //
+  // Only persists large tool outputs to prevent context overflow.
+  // All other processing (metadata stripping, filtering, MicroCompact)
+  // happens in afterTurn().
 
   async ingest(params: {
     sessionId: string;
@@ -160,26 +172,24 @@ export class SmartContextEngine {
     }
     const s = this.state(params.sessionId);
     const role = extractRole(params.message);
-    let rawContent = (params.message as { content?: unknown }).content;
+    let content = (params.message as { content?: unknown }).content;
 
-    // Strip platform metadata from user messages before processing
-    if (role === "user" && typeof rawContent === "string") {
-      rawContent = stripPlatformMetadata(rawContent);
-    }
-
-    const processed = await this.contentProcessor.processContent(
-      rawContent,
-      params.sessionId,
-    );
-
-    if (processed.dropMessage) {
-      return { ingested: true };
+    // Only persist large tool outputs to prevent context overflow.
+    // Everything else passes through as-is for the current turn.
+    if (role === "toolResult") {
+      const persisted = await this.contentProcessor.persistLargeContent(
+        content,
+        params.sessionId,
+      );
+      if (persisted !== null) {
+        content = persisted;
+      }
     }
 
     const idx = s.messages.length;
     const processedMessage = {
       ...(params.message as Record<string, unknown>),
-      content: processed.contextText,
+      content,
     };
     s.messages.push(processedMessage);
 
@@ -207,6 +217,79 @@ export class SmartContextEngine {
     }
   }
 
+  // ── afterTurn ───────────────────────────────────────────────────
+  //
+  // Post-turn processing:
+  // 1. Strip platform metadata from user messages
+  // 2. Apply content filters (drop NO_REPLY, strip HEARTBEAT, etc.)
+  // 3. Persist media and remaining large content
+  // 4. MicroCompact: clear old tool results from previous turns
+
+  async afterTurn(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    messages?: unknown[];
+    prePromptMessageCount?: number;
+    isHeartbeat?: boolean;
+    tokenBudget?: number;
+    runtimeContext?: unknown;
+  }): Promise<void> {
+    if (!this.shouldProcess(params.sessionKey)) return;
+
+    const s = this.state(params.sessionId);
+    const turnStart = s.lastProcessedIdx;
+
+    // 1. Process new messages from this turn
+    for (let i = turnStart; i < s.messages.length; i++) {
+      const msg = s.messages[i] as Record<string, unknown>;
+      const role = extractRole(msg);
+
+      // Strip platform metadata from user messages
+      if (role === "user" && typeof msg.content === "string") {
+        msg.content = stripPlatformMetadata(msg.content);
+      }
+
+      // Apply content filters + persist media/large text
+      const processed = await this.contentProcessor.processContent(
+        msg.content,
+        params.sessionId,
+      );
+      if (processed.dropMessage) {
+        msg._dropped = true;
+      } else if (processed.contextText !== extractText(msg)) {
+        msg.content = processed.contextText;
+      }
+    }
+
+    // 2. MicroCompact: clear old tool results from previous turns
+    for (let i = s.activeEnd; i < turnStart; i++) {
+      const msg = s.messages[i] as Record<string, unknown>;
+      if (extractRole(msg) === "toolResult" && !isDropped(msg)) {
+        const text = typeof msg.content === "string" ? msg.content : "";
+        if (text.length > this.config.largeTextThreshold) {
+          msg.content = "[Old tool result content cleared]";
+        }
+      }
+    }
+
+    s.lastProcessedIdx = s.messages.length;
+
+    // Persist: write finalized messages to DB (first write for this turn's messages)
+    for (let i = turnStart; i < s.messages.length; i++) {
+      this.messageStore.upsertMessage(params.sessionId, i, s.messages[i]);
+    }
+    // Also update MicroCompact'd messages from previous turns
+    for (let i = s.activeEnd; i < turnStart; i++) {
+      const msg = s.messages[i] as Record<string, unknown>;
+      const text = typeof msg.content === "string" ? msg.content : "";
+      if (extractRole(msg) === "toolResult" && !isDropped(msg) && text === "[Old tool result content cleared]") {
+        this.messageStore.upsertMessage(params.sessionId, i, msg);
+      }
+    }
+    this.messageStore.saveState(params.sessionId, s);
+  }
+
   // ── Event Focus ─────────────────────────────────────────────────
 
   /** Set the focused event for a session (tool-call or explicit). */
@@ -232,17 +315,14 @@ export class SmartContextEngine {
 
     const s = this.state(sessionId);
 
-    // Explicit focus
     if (s.focusedEventId) {
       const doc = mgr.getAllEvents().find((e) => e.id === s.focusedEventId);
       if (doc) return doc;
     }
 
-    // Auto-detect: most recently updated active event
     const active = mgr.getActiveEvents();
     if (active.length > 0) return active[0];
 
-    // Fallback: most recently updated completed event
     const all = mgr.getAllEvents()
       .filter((e) => e.status !== "active")
       .sort((a, b) => b.lastUpdated - a.lastUpdated);
@@ -267,7 +347,6 @@ export class SmartContextEngine {
     const selected: unknown[] = [];
     let totalChars = 0;
 
-    // Dedup and select active messages
     for (let i = 0; i < active.length; i++) {
       const msg = active[i];
       const isRecent = i >= recentStart;
@@ -288,11 +367,9 @@ export class SmartContextEngine {
 
     const systemParts: string[] = [];
 
-    // Layer 1: Focus event + entity descriptions
     const focusContext = await this.buildFocusEventContext(params.sessionId);
     if (focusContext) systemParts.push(focusContext);
 
-    // Layer 2: Recent events
     const recentEvents = await this.buildRecentEvents(params.sessionId);
     if (recentEvents) systemParts.push(recentEvents);
 
@@ -332,7 +409,6 @@ export class SmartContextEngine {
     parts.push("### Narrative (full)");
     parts.push(focusEvent.narrative.slice(-2000));
 
-    // Extract task/files/operations from linked summaries
     const summaryDetails = await this.extractSummaryDetails(sessionId, focusEvent);
     if (summaryDetails.task) {
       parts.push("", "### Task");
@@ -355,7 +431,6 @@ export class SmartContextEngine {
       }
     }
 
-    // Sources
     if (focusEvent.sources.length > 0) {
       parts.push("", "### Sources");
       for (const src of focusEvent.sources) {
@@ -363,7 +438,6 @@ export class SmartContextEngine {
       }
     }
 
-    // Entity descriptions
     const entityParts = await this.buildEntityDescriptions(mgr, focusEvent);
     if (entityParts) {
       parts.push("", "## Entity Context");
@@ -373,7 +447,6 @@ export class SmartContextEngine {
     return parts.join("\n");
   }
 
-  /** Extract task/files/operations from summary files linked to an event. */
   private async extractSummaryDetails(
     sessionId: string,
     event: EventDocument,
@@ -394,7 +467,6 @@ export class SmartContextEngine {
     return result;
   }
 
-  /** Build entity descriptions for the focus event's three dimensions. */
   private async buildEntityDescriptions(
     mgr: EventIndexManager,
     event: EventDocument,
@@ -432,7 +504,6 @@ export class SmartContextEngine {
     const focusEvent = this.resolveFocusEvent(sessionId);
     const recentCount = this.config.recentEventCount;
 
-    // Sort by lastUpdated, exclude focus event
     const recent = allEvents
       .filter((e) => !focusEvent || e.id !== focusEvent.id)
       .sort((a, b) => b.lastUpdated - a.lastUpdated)
@@ -488,9 +559,8 @@ export class SmartContextEngine {
     const coreChars = this.config.compactCoreTokens * CHARS_PER_TOKEN;
     const overlapChars = this.config.compactOverlapTokens * CHARS_PER_TOKEN;
 
-    // Compress windows until within budget
     while (totalChars > budgetChars) {
-      if (s.activeEnd >= s.messages.length) break; // All compressed
+      if (s.activeEnd >= s.messages.length) break;
 
       const window = this.compactor.buildWindow(
         s.messages,
@@ -500,20 +570,26 @@ export class SmartContextEngine {
 
       if (window.coreMessages.length === 0) break;
 
-      // Generate summary + extract events
+      // Skip dropped messages
+      const nonDroppedCore = window.coreMessages.filter((m) => !isDropped(m));
+      if (nonDroppedCore.length === 0) {
+        s.activeEnd = window.coreEndIdx;
+        totalChars = this.totalActiveChars(s);
+        continue;
+      }
+
       let markdown: string;
       let eventSummaries: EventSummary[];
       const knownDimensions = eventMgr.getKnownDimensions();
       const dims = knownDimensions.subjects.length > 0 ? knownDimensions : undefined;
 
       if (this.summarizer) {
-        const coreText = window.coreMessages
+        const coreText = nonDroppedCore
           .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
           .join("\n\n");
         try {
-          // Single LLM call: event-oriented compression
           const { rawOutput, events: llmEvents } = await extractEventsWithLLM(
-            window.coreMessages,
+            nonDroppedCore,
             window.preOverlap,
             window.postOverlap,
             this.summarizer,
@@ -521,30 +597,27 @@ export class SmartContextEngine {
             [window.coreStartIdx, window.coreEndIdx],
             dims,
           );
-          // Save raw LLM output as summary file
           markdown = rawOutput;
           eventSummaries = llmEvents;
         } catch {
-          markdown = this.compactor.buildStructuralSummary(window.coreMessages);
+          markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
           eventSummaries = extractEventsStructural(
-            window.coreMessages, "", [window.coreStartIdx, window.coreEndIdx], dims,
+            nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
           );
         }
       } else {
-        markdown = this.compactor.buildStructuralSummary(window.coreMessages);
+        markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
         eventSummaries = extractEventsStructural(
-          window.coreMessages, "", [window.coreStartIdx, window.coreEndIdx], dims,
+          nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
         );
       }
 
       if (eventSummaries.length === 0 && markdown.trim().length === 0) {
-        // Neither LLM nor structural produced output — skip this window
         s.activeEnd = window.coreEndIdx;
         totalChars = this.totalActiveChars(s);
         continue;
       }
 
-      // Save summary to disk
       const compressed = await this.compactor.saveSummary(
         params.sessionId,
         markdown,
@@ -552,17 +625,16 @@ export class SmartContextEngine {
         window.coreTotalChars,
       );
 
-      // Patch sourceSummary on events
       eventSummaries = eventSummaries.map((e) => ({ ...e, sourceSummary: compressed.storagePath }));
+
+      // Record window range in DB (messages already stored by ingest, no duplication)
+      this.messageStore.addWindow(params.sessionId, compressed);
 
       s.compressedWindows.push(compressed);
       s.activeEnd = window.coreEndIdx;
 
-      // Process events through the index
       if (eventSummaries.length > 0) {
         await eventMgr.processSummaries(eventSummaries);
-
-        // Update active events list
         s.activeEvents = eventMgr.getActiveEvents().map((e) => e.id);
       }
 
@@ -570,6 +642,9 @@ export class SmartContextEngine {
     }
 
     const tokensAfter = Math.ceil(totalChars / CHARS_PER_TOKEN);
+
+    // Persist state after compression
+    this.messageStore.saveState(params.sessionId, s);
 
     return {
       ok: true,
@@ -585,21 +660,43 @@ export class SmartContextEngine {
     sessionKey?: string;
     sessionFile: string;
   }): Promise<BootstrapResult> {
-    return { bootstrapped: true, importedMessages: 0, reason: "memory-only engine" };
+    if (!this.shouldProcess(params.sessionKey)) {
+      return { bootstrapped: true, importedMessages: 0, reason: "session filtered" };
+    }
+
+    const loaded = this.messageStore.load(params.sessionId);
+    if (loaded) {
+      this.sessions.set(params.sessionId, loaded);
+      return {
+        bootstrapped: true,
+        importedMessages: loaded.messages.length,
+        reason: `restored from disk (${loaded.compressedWindows.length} compressed windows, ${loaded.activeEvents.length} active events)`,
+      };
+    }
+
+    return { bootstrapped: true, importedMessages: 0, reason: "no saved state" };
   }
 
   // ── dispose ─────────────────────────────────────────────────────
 
   async dispose(): Promise<void> {
-    // Close SQLite databases first (before cleanup deletes files)
+    // Persist all sessions before shutdown
+    for (const [sessionId, s] of this.sessions) {
+      try {
+        this.messageStore.saveState(sessionId, s);
+      } catch {
+        // best-effort
+      }
+    }
+
     for (const mgr of this.eventManagers.values()) {
       mgr.close();
     }
     this.eventManagers.clear();
 
-    for (const sessionId of this.sessions.keys()) {
-      await this.contentProcessor.cleanupSession(sessionId);
-    }
+    // Close all DBs after event managers are done
+    this.messageStore.closeAll();
+
     this.sessions.clear();
   }
 
@@ -634,39 +731,33 @@ function extractToolArg(msg: unknown, key: string): string {
   return "";
 }
 
+function isDropped(msg: unknown): boolean {
+  return (msg as Record<string, unknown>)._dropped === true;
+}
+
 /**
  * Strip OpenClaw platform metadata blocks from user message content.
- * Removes: Conversation info, Sender, message_id prefix — keeps actual user text.
  */
 function stripPlatformMetadata(text: string): string {
-  // Strip "Conversation info (untrusted metadata):" + following ```json...``` block
   let result = text.replace(
     /Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```/g,
     "",
   );
-  // Strip "Sender (untrusted metadata):" + following ```json...``` block
   result = result.replace(
     /Sender \(untrusted metadata\):\s*```json[\s\S]*?```/g,
     "",
   );
-  // Strip "[message_id: ...]" lines
   result = result.replace(/^\[message_id:.*\]$/gm, "");
-  // Strip "ou_<hex>:" sender prefix on actual text lines
   result = result.replace(/^ou_[a-f0-9]+:\s*/gm, "");
-  // Clean up excess blank lines
   result = result.replace(/\n{3,}/g, "\n\n").trim();
   return result;
 }
 
 // ── Session key helpers ─────────────────────────────────────────────
 
-/** Determine if a sessionKey corresponds to a main session.
- *  Main session keys: agent:{agentId}:main or agent:main:main
- *  Non-main examples: agent:main:slack:workspace:direct:user123
- */
 function isMainSessionKey(sessionKey: string): boolean {
   const parts = sessionKey.split(":");
-  if (parts.length < 2) return true; // Unknown format — allow
+  if (parts.length < 2) return true;
   if (parts.length === 3 && parts[2] === "main") return true;
   if (parts.length === 2 && parts[0] === "agent") return true;
   return false;

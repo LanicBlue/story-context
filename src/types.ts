@@ -27,6 +27,8 @@ export type SessionState = {
   eventIndex?: EventIndex;
   /** IDs of events that are likely still in progress. */
   activeEvents: string[];
+  /** Index of first message not yet processed by afterTurn. */
+  lastProcessedIdx: number;
 };
 
 /** LLM summarizer interface used by compact(). */
@@ -53,11 +55,7 @@ export type SmartContextConfig = {
   summaryCustomInstructions?: string;
   // Content processing
   largeTextThreshold: number;
-  outlineHeadLines: number;
-  outlineTailLines: number;
-  outlineMaxSections: number;
   storageDir: string;
-  outlineSummaryEnabled: boolean;
   contentFilters: Array<{
     match: "contains" | "regex";
     pattern: string;

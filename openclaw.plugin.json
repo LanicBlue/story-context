@@ -79,25 +79,7 @@
       "largeTextThreshold": {
         "type": "integer",
         "minimum": 500,
-        "description": "Character threshold above which text is offloaded to disk with outline (default 2000)"
-      },
-      "outlineHeadLines": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-        "description": "Number of leading lines kept verbatim in outline (default 8)"
-      },
-      "outlineTailLines": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-        "description": "Number of trailing lines kept verbatim in outline (default 5)"
-      },
-      "outlineMaxSections": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 100,
-        "description": "Maximum section markers in outline (default 20)"
+        "description": "Character threshold above which tool output is persisted to disk with summary (default 2000)"
       },
       "storageDir": {
         "type": "string",
@@ -105,7 +87,7 @@
       },
       "outlineSummaryEnabled": {
         "type": "boolean",
-        "description": "Use LLM to generate enhanced summary for large text outlines (default false)"
+        "description": "Use LLM to generate enhanced summary for large persisted outputs (default false). Deprecated: use summaryEnabled instead."
       },
       "contentFilters": {
         "type": "array",

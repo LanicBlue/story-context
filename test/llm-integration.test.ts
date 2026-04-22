@@ -149,7 +149,6 @@ function cleanTestDir(name: string): string {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch {
-      // Windows EPERM — try renaming and creating fresh
       try {
         const backup = dir + "-old-" + Date.now();
         require("fs").renameSync(dir, backup);
@@ -176,19 +175,15 @@ async function runPipeline(
     compactCoreTokens: 6_000,
     compactOverlapTokens: 1_000,
     largeTextThreshold: 4000,
-    outlineSummaryEnabled: true,
+    summaryEnabled: true,
     sessionFilter: "all",
     storageDir,
     contentFilters: [
-      // Drop memory system context injections (no event value)
       { match: "contains", pattern: "## User's conversation history", granularity: "message" },
       { match: "contains", pattern: "## Memory system", granularity: "message" },
-      // Drop assistant pure auto-replies
       { match: "regex", pattern: "^NO_REPLY\\s*$", granularity: "message" },
-      // Strip heartbeat confirmation tokens (keep rest of message)
       { match: "regex", pattern: "^HEARTBEAT_OK\\s*$", granularity: "line" },
       { match: "regex", pattern: "^HEARTBEAT_CHECK\\s*$", granularity: "line" },
-      // Strip external content trust wrapper tags
       { match: "regex", pattern: "^<<<EXTERNAL_UNTRUSTED_CONTENT.*>>>$", granularity: "line" },
       { match: "regex", pattern: "^<<<END_EXTERNAL_UNTRUSTED_CONTENT.*>>>$", granularity: "line" },
     ],
@@ -200,10 +195,16 @@ async function runPipeline(
 
   for (let i = 0; i < messages.length; i += batchSize) {
     const batch = messages.slice(i, i + batchSize);
+
+    // Ingest all messages in the batch (raw, only large tool outputs persisted)
     for (const msg of batch) {
       await engine.ingest({ sessionId, message: msg });
     }
 
+    // AfterTurn: strip metadata, apply filters, MicroCompact old tool results
+    await engine.afterTurn({ sessionId, sessionFile: "" });
+
+    // Compact: compress and extract events
     const cr = await engine.compact({ sessionId, sessionFile: "" });
     if (cr.compacted) compactCount++;
 
@@ -235,7 +236,6 @@ async function runPipeline(
     console.log(`systemPromptAddition: ${assembleResult.systemPromptAddition.length} chars`);
   }
 
-  // Compression stats
   let totalOriginal = 0;
   let totalCompressed = 0;
   for (const w of state.compressedWindows) {
@@ -262,14 +262,11 @@ describe("Phase A: LLM smoke test", () => {
 
       const { state, assembleResult } = await runPipeline(messages, storageDir, 100);
 
-      // Verify compression happened
       expect(state.compressedWindows.length).toBeGreaterThan(0);
 
-      // Print output tree
       console.log(`\n=== Output: ${storageDir}/conv-1/ ===`);
       printTree(join(storageDir, "conv-1"));
 
-      // Check sample summary
       const summariesDir = join(storageDir, "conv-1", "summaries");
       if (existsSync(summariesDir)) {
         const files = readdirSync(summariesDir);
@@ -278,12 +275,10 @@ describe("Phase A: LLM smoke test", () => {
           console.log(`\n--- Sample summary: ${files[0]} (first 1000 chars) ---`);
           console.log(sample.slice(0, 1000));
 
-          // Verify LLM-generated summary has structured sections
           expect(sample).toContain("## ");
         }
       }
 
-      // Check sample event
       const eventsDir = join(storageDir, "conv-1", "events");
       if (existsSync(eventsDir)) {
         const files = readdirSync(eventsDir);
@@ -294,10 +289,9 @@ describe("Phase A: LLM smoke test", () => {
         }
       }
 
-      // Verify assemble output
       expect(assembleResult.systemPromptAddition).toBeDefined();
     },
-    1_200_000, // 20 min timeout for LLM calls
+    1_200_000,
   );
 });
 
@@ -314,12 +308,10 @@ describe("Phase B: medium scale stability", () => {
 
       const { state, assembleResult } = await runPipeline(messages, storageDir, 500);
 
-      // Verify significant compression
       expect(state.compressedWindows.length).toBeGreaterThan(5);
 
-      // Check dimension diversity
       const eventsDir = join(storageDir, "conv-1", "events");
-      if (existsDir(eventsDir)) {
+      if (existsSync(eventsDir)) {
         const subjects = new Set<string>();
         const types = new Set<string>();
         const scenarios = new Set<string>();
@@ -339,14 +331,13 @@ describe("Phase B: medium scale stability", () => {
         console.log(`  Types: ${[...types].join(", ")}`);
         console.log(`  Scenarios: ${[...scenarios].join(", ")}`);
 
-        // Should have at least some non-trivial dimensions
         const nonTrivialSubjects = [...subjects].filter((s) => s !== "未知");
         console.log(`  Non-trivial subjects: ${nonTrivialSubjects.length}/${subjects.size}`);
       }
 
       expect(assembleResult.systemPromptAddition).toBeDefined();
     },
-    3_600_000, // 60 min timeout
+    3_600_000,
   );
 });
 
@@ -368,7 +359,6 @@ describe("Phase C: full scale", () => {
         storageDir,
         500,
         ({ batch, total, compactCount }) => {
-          // Print progress every 10 batches (~5000 messages)
           if (batch % 10 === 0) {
             const elapsed = (Date.now() - startTime) / 1000;
             const rate = batch / elapsed;
@@ -383,7 +373,6 @@ describe("Phase C: full scale", () => {
         },
       );
 
-      // Final stats
       const elapsed = (Date.now() - startTime) / 1000;
       console.log(`\nTotal time: ${(elapsed / 3600).toFixed(2)} hours`);
 
@@ -393,10 +382,6 @@ describe("Phase C: full scale", () => {
         expect(assembleResult.systemPromptAddition.length).toBeLessThan(100_000);
       }
     },
-    36_000_000, // 10 hour timeout
+    36_000_000,
   );
 });
-
-function existsDir(path: string): boolean {
-  return existsSync(path);
-}

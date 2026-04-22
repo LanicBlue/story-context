@@ -4,6 +4,7 @@ import { applyContentFilters } from "./content-filter.js";
 import { ContentStorage } from "./content-storage.js";
 
 const PREVIEW_SIZE = 2000;
+const PERSISTED_MARKER = "<persisted-output>";
 
 type InternalBlock = TextBlock & { raw?: unknown };
 
@@ -25,14 +26,29 @@ export class ContentProcessor {
     private readonly summarizer?: Summarizer,
   ) {}
 
+  /**
+   * Ingest-only: persist large content to disk and return persisted-output format.
+   * Returns null if content doesn't need persistence (below threshold or already persisted).
+   */
+  async persistLargeContent(
+    content: unknown,
+    sessionId: string,
+  ): Promise<string | null> {
+    const text = this.extractTextContent(content);
+    if (text.length < this.config.largeTextThreshold) return null;
+    if (text.startsWith(PERSISTED_MARKER)) return null;
+    return this.processLargeText(text, sessionId);
+  }
+
+  /**
+   * AfterTurn: full processing — normalize, filter, persist media/large text.
+   */
   async processContent(
     content: unknown,
     sessionId: string,
   ): Promise<ProcessedContent> {
-    // Normalize content into blocks
     const blocks = this.normalizeContent(content);
 
-    // Apply content filters
     if (this.config.contentFilters.length > 0) {
       const filterResult = applyContentFilters(blocks, this.config.contentFilters);
       if (filterResult.dropMessage) {
@@ -51,7 +67,6 @@ export class ContentProcessor {
       return { contextText: "", dropMessage: false };
     }
 
-    // Process each block
     const parts: string[] = [];
     for (const block of blocks) {
       const text = await this.processBlock(block, sessionId);
@@ -66,6 +81,29 @@ export class ContentProcessor {
   }
 
   // ── Internal ────────────────────────────────────────────────────
+
+  private extractTextContent(content: unknown): string {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((part: unknown) => {
+          if (typeof part === "string") return part;
+          if (part && typeof part === "object") {
+            const p = part as { text?: string; content?: string };
+            if (typeof p.text === "string") return p.text;
+            if (typeof p.content === "string") return p.content;
+          }
+          return "";
+        })
+        .join(" ")
+        .trim();
+    }
+    if (content && typeof content === "object") {
+      const c = content as { text?: string; content?: string };
+      return c.text ?? c.content ?? "";
+    }
+    return "";
+  }
 
   private normalizeContent(content: unknown): InternalBlock[] {
     if (content == null) return [];
@@ -86,12 +124,10 @@ export class ContentProcessor {
       const b = block as Record<string, unknown>;
       const type = typeof b.type === "string" ? b.type : "unknown";
 
-      // Media block types — preserve raw for later extraction
       if (type === "image" || type === "audio" || type === "file") {
         return { type, text: "", raw: block };
       }
 
-      // Text-like blocks
       const text =
         typeof b.text === "string" ? b.text :
         typeof b.content === "string" ? b.content :
@@ -105,17 +141,19 @@ export class ContentProcessor {
   private async processBlock(block: InternalBlock, sessionId: string): Promise<string> {
     const { type, text } = block;
 
-    // Media blocks — store to disk, return metadata
     if (type === "image" || type === "audio" || type === "file") {
       return this.processMediaBlock(block, sessionId);
     }
 
-    // Short text — passthrough
+    // Skip already-persisted content (from ingest)
+    if (text.startsWith(PERSISTED_MARKER)) {
+      return text;
+    }
+
     if (text.length < this.config.largeTextThreshold) {
       return text;
     }
 
-    // Large text — store to disk, generate outline
     return this.processLargeText(text, sessionId);
   }
 
@@ -139,7 +177,6 @@ export class ContentProcessor {
       `</persisted-output>`,
     ];
 
-    // LLM summary — concise abstract of the full content
     if (this.config.summaryEnabled && this.summarizer) {
       try {
         const summary = await this.summarizer.summarize(text, 300);
@@ -165,7 +202,6 @@ export class ContentProcessor {
     const prefix = block.type === "image" ? "img" : block.type === "audio" ? "audio" : "file";
 
     if (!data || data.length === 0) {
-      // No actual data to store — just metadata
       return `[${block.type}: no data${name ? `, name=${name}` : ""}]`;
     }
 
@@ -191,11 +227,9 @@ export class ContentProcessor {
   }
 
   private extractMediaType(raw: Record<string, unknown>): string | undefined {
-    // Check common locations for media type
     if (typeof raw.mediaType === "string") return raw.mediaType;
     if (typeof raw.mime_type === "string") return raw.mime_type;
     if (typeof raw.mimeType === "string") return raw.mimeType;
-    // Check source block
     const source = raw.source;
     if (source && typeof source === "object") {
       const s = source as Record<string, unknown>;
@@ -206,13 +240,10 @@ export class ContentProcessor {
   }
 
   private extractMediaData(raw: Record<string, unknown>): Buffer | null {
-    // Direct data field
     if (raw.data instanceof Buffer) return raw.data;
     if (typeof raw.data === "string") {
       return this.decodeBase64Data(raw.data);
     }
-
-    // Source block (Anthropic/OpenAI style)
     const source = raw.source;
     if (source && typeof source === "object") {
       const s = source as Record<string, unknown>;
@@ -220,17 +251,14 @@ export class ContentProcessor {
       if (typeof s.data === "string") {
         return this.decodeBase64Data(s.data);
       }
-      // URL source — store URL reference
       if (typeof s.url === "string") {
         return Buffer.from(s.url);
       }
     }
-
     return null;
   }
 
   private decodeBase64Data(data: string): Buffer {
-    // Strip data URI prefix if present: data:image/png;base64,...
     const base64Match = data.match(/^data:[^;]+;base64,(.+)$/s);
     const raw = base64Match ? base64Match[1] : data;
     return Buffer.from(raw, "base64");

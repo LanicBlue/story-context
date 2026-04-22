@@ -23,18 +23,15 @@ function makeProcessor(
   overrides: {
     largeTextThreshold?: number;
     contentFilters?: ContentFilterRule[];
-    outlineSummaryEnabled?: boolean;
+    summaryEnabled?: boolean;
   } = {},
   summarizer?: Summarizer,
 ) {
   return new ContentProcessor(
     {
       largeTextThreshold: overrides.largeTextThreshold ?? 2000,
-      outlineHeadLines: 3,
-      outlineTailLines: 2,
-      outlineMaxSections: 10,
       contentFilters: overrides.contentFilters ?? [],
-      outlineSummaryEnabled: overrides.outlineSummaryEnabled ?? false,
+      summaryEnabled: overrides.summaryEnabled ?? false,
     },
     storage,
     summarizer,
@@ -60,17 +57,44 @@ describe("ContentProcessor", () => {
     });
   });
 
-  describe("large text processing", () => {
-    it("stores large text and returns outline", async () => {
+  describe("persistLargeContent (ingest)", () => {
+    it("returns null for content below threshold", async () => {
+      const cp = makeProcessor({ largeTextThreshold: 100 });
+      const result = await cp.persistLargeContent("short text", "s1");
+      expect(result).toBeNull();
+    });
+
+    it("returns null for already-persisted content", async () => {
+      const cp = makeProcessor({ largeTextThreshold: 100 });
+      const persisted = "<persisted-output>already done</persisted-output>";
+      const result = await cp.persistLargeContent(persisted, "s1");
+      expect(result).toBeNull();
+    });
+
+    it("persists large content and returns persisted-output format", async () => {
+      const cp = makeProcessor({ largeTextThreshold: 100 });
+      const longText = "x".repeat(200);
+
+      const result = await cp.persistLargeContent(longText, "s1");
+      expect(result).not.toBeNull();
+      expect(result).toContain("<persisted-output>");
+      expect(result).toContain("</persisted-output>");
+      expect(result).toContain("text/content-");
+      expect(result).toContain("Preview");
+    });
+  });
+
+  describe("large text processing (afterTurn)", () => {
+    it("stores large text and returns persisted-output", async () => {
       const cp = makeProcessor({ largeTextThreshold: 100 });
       const longText = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n");
 
       const result = await cp.processContent(longText, "s1");
-      expect(result.contextText).toContain("[Stored:");
+      expect(result.contextText).toContain("<persisted-output>");
+      expect(result.contextText).toContain("</persisted-output>");
       expect(result.contextText).toContain("text/content-");
       expect(result.contextText).toContain("50 lines");
-      expect(result.contextText).toContain("--- Head ---");
-      expect(result.contextText).toContain("--- Tail ---");
+      expect(result.contextText).toContain("Preview");
     });
 
     it("stores large text from array content", async () => {
@@ -81,7 +105,7 @@ describe("ContentProcessor", () => {
         [{ type: "text", text: longText }],
         "s1",
       );
-      expect(result.contextText).toContain("[Stored:");
+      expect(result.contextText).toContain("<persisted-output>");
     });
 
     it("includes AI summary when enabled and summarizer available", async () => {
@@ -89,7 +113,7 @@ describe("ContentProcessor", () => {
         summarize: async () => "Key findings: 3 errors found",
       };
       const cp = makeProcessor(
-        { largeTextThreshold: 100, outlineSummaryEnabled: true },
+        { largeTextThreshold: 100, summaryEnabled: true },
         mockSummarizer,
       );
 
@@ -103,12 +127,20 @@ describe("ContentProcessor", () => {
         summarize: async () => "summary",
       };
       const cp = makeProcessor(
-        { largeTextThreshold: 100, outlineSummaryEnabled: false },
+        { largeTextThreshold: 100, summaryEnabled: false },
         mockSummarizer,
       );
 
       const result = await cp.processContent("x".repeat(200), "s1");
       expect(result.contextText).not.toContain("--- AI Summary ---");
+    });
+
+    it("skips already-persisted content", async () => {
+      const cp = makeProcessor({ largeTextThreshold: 100 });
+      const persisted = "<persisted-output>already persisted content that is quite long to exceed threshold</persisted-output>";
+
+      const result = await cp.processContent(persisted, "s1");
+      expect(result.contextText).toBe(persisted);
     });
   });
 
@@ -165,7 +197,6 @@ describe("ContentProcessor", () => {
         "s1",
       );
       expect(result.contextText).toContain("image stored:");
-      // URL source: URL is stored as the media content
       expect(result.contextText).toContain("27 bytes");
     });
   });
@@ -248,7 +279,6 @@ describe("ContentProcessor", () => {
       const cp = makeProcessor({ largeTextThreshold: 10 });
       await cp.processContent("x".repeat(50), "s1");
       await cp.cleanupSession("s1");
-      // Should not throw; directory removed
       await expect(cp.cleanupSession("s1")).resolves.toBeUndefined();
     });
   });
