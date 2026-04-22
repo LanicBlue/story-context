@@ -1,19 +1,19 @@
-/** Attribute dimensions extracted per event during compression. */
-export type EventAttributes = {
-  /** What entity this event is about (project, system, module, concept, person). */
+/** Attribute dimensions extracted per story during compression. */
+export type StoryAttributes = {
+  /** What entity this story is about (project, system, module, concept, person). */
   subject: string;
-  /** Event category (software development, investigation, decision, discussion, etc.). */
+  /** Story category (software development, investigation, decision, discussion, etc.). */
   type: string;
   /** Application context/domain (production, tech selection, client engagement, etc.). */
   scenario: string;
 };
 
-/** A single event extracted from one compressed window. */
-export type EventSummary = {
+/** A single story extracted from one compressed window. */
+export type StorySummary = {
   /** Narrative description of what happened. */
   content: string;
   /** Extracted attribute values across predefined dimensions. */
-  attributes: EventAttributes;
+  attributes: StoryAttributes;
   /** Source summary file, e.g. "summaries/2026-04-21-0.md". */
   sourceSummary: string;
   /** Message range [start, end) within the session. */
@@ -22,14 +22,14 @@ export type EventSummary = {
   timestamp: number;
 };
 
-/** A persistent event document stored as events/evt-<hash>.md. */
-export type EventDocument = {
-  /** "evt-<hash>", matches the filename stem. */
+/** A persistent story document stored as stories/story-<hash>.md. */
+export type StoryDocument = {
+  /** "story-<hash>", matches the filename stem. */
   id: string;
   /** Human-readable title. */
   title: string;
   /** Attribute values accumulated across all contributing summaries. */
-  attributes: EventAttributes;
+  attributes: StoryAttributes;
   /** Ordered list of source summary references. */
   sources: Array<{
     /** e.g. "summaries/2026-04-21-0.md" */
@@ -39,7 +39,7 @@ export type EventDocument = {
     snippet: string;
   }>;
   status: "active" | "paused" | "completed" | "abandoned";
-  /** Evolving narrative, appended as new summaries match this event. */
+  /** Evolving narrative, appended as new summaries match this story. */
   narrative: string;
   createdAt: number;
   lastUpdated: number;
@@ -52,8 +52,8 @@ export type EntityDocument = {
   name: string;
   /** LLM-generated description of this entity. */
   description: string;
-  /** IDs of events that reference this entity. */
-  eventIds: string[];
+  /** IDs of stories that reference this entity. */
+  storyIds: string[];
   /** Links to other entities. */
   relatedEntities: Array<{
     dimension: "subject" | "type" | "scenario";
@@ -63,9 +63,9 @@ export type EntityDocument = {
   lastUpdated: number;
 };
 
-/** In-memory event index for a session. */
-export type EventIndex = {
-  documents: Map<string, EventDocument>;
+/** In-memory story index for a session. */
+export type StoryIndex = {
+  documents: Map<string, StoryDocument>;
   entities: Map<string, EntityDocument>; // key = "dimension:name"
   processedSummaries: Set<string>;
 };

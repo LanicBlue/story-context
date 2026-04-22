@@ -1,4 +1,4 @@
-import type { EventIndex } from "./event-types.js";
+import type { StoryIndex } from "./story-types.js";
 
 /** A compressed window of conversation content stored on disk. */
 export type CompressedWindow = {
@@ -20,13 +20,13 @@ export type SessionState = {
   compressedWindows: CompressedWindow[];
   /** Messages in [0, activeEnd) have been compressed to disk. */
   activeEnd: number;
-  /** Event-focus state: null means auto-detect mode. */
-  focusedEventId: string | null;
+  /** Story-focus state: null means auto-detect mode. */
+  focusedStoryId: string | null;
   seenReads: Map<string, number>; // path -> message index
-  /** Event index for this session. */
-  eventIndex?: EventIndex;
-  /** IDs of events that are likely still in progress. */
-  activeEvents: string[];
+  /** Story index for this session. */
+  storyIndex?: StoryIndex;
+  /** IDs of stories that are likely still in progress. */
+  activeStories: string[];
   /** Index of first message not yet processed by afterTurn. */
   lastProcessedIdx: number;
 };
@@ -62,8 +62,9 @@ export type SmartContextConfig = {
     caseSensitive?: boolean;
     granularity: "message" | "block" | "line";
   }>;
-  // Event context
-  recentEventCount: number;
+  // Story context
+  recentStoryCount: number;
+  recentSummaryCount: number;
   // Session filtering
   sessionFilter: "all" | "main" | string[];
 };

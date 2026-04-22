@@ -229,7 +229,7 @@ async function runPipeline(
       console.log(
         `[Batch ${batchNum}/${totalBatches}] compactions=${compactCount}, ` +
         `windows=${state?.compressedWindows.length ?? 0}, ` +
-        `events=${state?.activeEvents.length ?? 0}`,
+        `stories=${state?.activeStories.length ?? 0}`,
       );
     }
 
@@ -240,7 +240,7 @@ async function runPipeline(
   const assembleResult = await engine.assemble({ sessionId, messages: [] });
 
   console.log(`\n=== Final State ===`);
-  console.log(`Messages: ${state.messages.length}, Windows: ${state.compressedWindows.length}, Events: ${state.activeEvents.length}`);
+  console.log(`Messages: ${state.messages.length}, Windows: ${state.compressedWindows.length}, Stories: ${state.activeStories.length}`);
   console.log(`Assemble: ${assembleResult.messages.length} msgs, ${assembleResult.estimatedTokens} tokens`);
 
   return { state, assembleResult };

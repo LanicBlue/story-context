@@ -1,13 +1,13 @@
-import type { EventSummary, EventAttributes } from "./event-types.js";
+import type { StorySummary, StoryAttributes } from "./story-types.js";
 import type { Summarizer } from "./types.js";
 import { extractText, extractRole, extractToolName, extractToolArg } from "./compactor.js";
 
 // ── LLM Prompt Templates ──────────────────────────────────────────
 
-export const EVENT_EXTRACT_SYSTEM_PROMPT =
+export const STORY_EXTRACT_SYSTEM_PROMPT =
   "You are a conversation compression engine. /no_think\n" +
-  "Task: Read the conversation and extract events.\n" +
-  "For each event, provide:\n" +
+  "Task: Read the conversation and extract stories.\n" +
+  "For each story, provide:\n" +
   "1. subject: the main entity (project name, module, concept, person)\n" +
   "2. type: activity type (development, investigation, troubleshooting, decision, discussion, deployment, analysis)\n" +
   "3. scenario: context (production, development, testing, client engagement, configuration)\n" +
@@ -17,9 +17,9 @@ export const EVENT_EXTRACT_SYSTEM_PROMPT =
   "- Each content section must be your own summary of what occurred\n" +
   "- Omit tool output details, file contents, and API responses\n\n" +
   "Output format:\n" +
-  "---EVENT---\n## subject\n<value>\n## type\n<value>\n## scenario\n<value>\n## content\n<your narrative summary>\n---END---";
+  "---STORY---\n## subject\n<value>\n## type\n<value>\n## scenario\n<value>\n## content\n<your narrative summary>\n---END---";
 
-export const EVENT_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract events.
+export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract stories.
 
 [Context before]
 {preOverlap}
@@ -30,23 +30,23 @@ export const EVENT_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and e
 [Context after]
 {postOverlap}
 
-Extract events using the ---EVENT--- format. Write narrative summaries, not raw text.`;
+Extract stories using the ---STORY--- format. Write narrative summaries, not raw text.`;
 
 export const SEMANTIC_MATCH_PROMPT =
-  "Determine whether the attributes of the following two events semantically match. " +
+  "Determine whether the attributes of the following two stories semantically match. " +
   "Values expressing the same concept with different wording also count as matching. " +
   'Output JSON: {"subject": true/false, "type": true/false, "scenario": true/false}';
 
 // ── Parse LLM Output ──────────────────────────────────────────────
 
-/** Parse event-oriented LLM output into EventSummary array. */
-export function parseEventOrientedOutput(
+/** Parse story-oriented LLM output into StorySummary array. */
+export function parseStoryOrientedOutput(
   markdown: string,
   sourceSummary: string,
   messageRange: [number, number],
-): EventSummary[] {
-  const events: EventSummary[] = [];
-  const blocks = markdown.split(/---EVENT---/).filter((b) => b.trim());
+): StorySummary[] {
+  const stories: StorySummary[] = [];
+  const blocks = markdown.split(/---STORY---/).filter((b) => b.trim());
 
   for (const block of blocks) {
     const cleaned = block.replace(/---END---/g, "").trim();
@@ -55,10 +55,10 @@ export function parseEventOrientedOutput(
     const scenario = extractSection(cleaned, "scenario");
     const content = extractSection(cleaned, "content");
 
-    // Skip events with no meaningful content
+    // Skip stories with no meaningful content
     if (!content || content.trim().length < 10) continue;
 
-    events.push({
+    stories.push({
       content: content.trim(),
       attributes: {
         subject: subject?.trim() || "未知",
@@ -71,9 +71,9 @@ export function parseEventOrientedOutput(
     });
   }
 
-  // Fallback: if no structured events found, treat entire output as one event
-  if (events.length === 0 && markdown.trim()) {
-    events.push({
+  // Fallback: if no structured stories found, treat entire output as one story
+  if (stories.length === 0 && markdown.trim()) {
+    stories.push({
       content: markdown.trim(),
       attributes: { subject: "未知", type: "对话", scenario: "通用" },
       sourceSummary,
@@ -82,7 +82,7 @@ export function parseEventOrientedOutput(
     });
   }
 
-  return events;
+  return stories;
 }
 
 function extractSection(text: string, heading: string): string | undefined {
@@ -91,8 +91,8 @@ function extractSection(text: string, heading: string): string | undefined {
   return match?.[1]?.trim();
 }
 
-/** Extract events using LLM, falling back to structural extraction on failure. */
-export async function extractEventsWithLLM(
+/** Extract stories using LLM, falling back to structural extraction on failure. */
+export async function extractStoriesWithLLM(
   coreMessages: unknown[],
   preOverlap: string,
   postOverlap: string,
@@ -100,14 +100,14 @@ export async function extractEventsWithLLM(
   sourceSummary: string,
   messageRange: [number, number],
   knownDimensions?: KnownDimensions,
-): Promise<{ rawOutput: string; events: EventSummary[] }> {
+): Promise<{ rawOutput: string; stories: StorySummary[] }> {
   try {
     // Use already-processed message text (metadata stripped, large text outlined)
     const coreText = coreMessages
       .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
       .join("\n\n");
 
-    const prompt = EVENT_EXTRACT_USER_TEMPLATE
+    const prompt = STORY_EXTRACT_USER_TEMPLATE
       .replace("{preOverlap}", preOverlap || "(none)")
       .replace("{core}", coreText)
       .replace("{postOverlap}", postOverlap || "(none)");
@@ -123,18 +123,18 @@ export async function extractEventsWithLLM(
       }
     }
 
-    const fullPrompt = EVENT_EXTRACT_SYSTEM_PROMPT + "\n\n" + prompt + knownHint;
+    const fullPrompt = STORY_EXTRACT_SYSTEM_PROMPT + "\n\n" + prompt + knownHint;
     const rawOutput = await summarizer.summarize(fullPrompt, 2000);
 
-    const events = parseEventOrientedOutput(rawOutput, sourceSummary, messageRange);
+    const stories = parseStoryOrientedOutput(rawOutput, sourceSummary, messageRange);
 
-    if (events.length === 0) {
-      return { rawOutput, events: extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
+    if (stories.length === 0) {
+      return { rawOutput, stories: extractStoriesStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
     }
 
-    return { rawOutput, events };
+    return { rawOutput, stories };
   } catch {
-    return { rawOutput: "", events: extractEventsStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
+    return { rawOutput: "", stories: extractStoriesStructural(coreMessages, sourceSummary, messageRange, knownDimensions) };
   }
 }
 
@@ -146,15 +146,15 @@ export type KnownDimensions = {
   scenarios: string[];
 };
 
-/** Extract events structurally from messages without LLM. */
-export function extractEventsStructural(
+/** Extract stories structurally from messages without LLM. */
+export function extractStoriesStructural(
   coreMessages: unknown[],
   sourceSummary: string,
   messageRange: [number, number],
   knownDimensions?: KnownDimensions,
-): EventSummary[] {
-  // Group messages into event segments by detecting topic boundaries
-  const segments = detectEventSegments(coreMessages);
+): StorySummary[] {
+  // Group messages into story segments by detecting topic boundaries
+  const segments = detectStorySegments(coreMessages);
 
   return segments.map((seg) => {
     const attrs = extractAttributesFromSegment(seg.messages, knownDimensions);
@@ -174,7 +174,7 @@ type MessageSegment = {
   messages: unknown[];
 };
 
-function detectEventSegments(messages: unknown[]): MessageSegment[] {
+function detectStorySegments(messages: unknown[]): MessageSegment[] {
   if (messages.length === 0) return [];
 
   const segments: MessageSegment[] = [{ messages: [] }];
@@ -209,7 +209,7 @@ function detectEventSegments(messages: unknown[]): MessageSegment[] {
   return segments.filter((s) => s.messages.length > 0);
 }
 
-function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensions): EventAttributes {
+function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensions): StoryAttributes {
   const files = new Set<string>();
   let hasWrite = false;
   let hasShellError = false;

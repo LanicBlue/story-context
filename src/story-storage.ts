@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { EventDocument, EntityDocument } from "./event-types.js";
+import type { StoryDocument, EntityDocument } from "./story-types.js";
 import { ContentStorage } from "./content-storage.js";
 
 // ── YAML Frontmatter Parse/Serialize ──────────────────────────────
@@ -25,9 +25,9 @@ function serializeFrontmatter(meta: Record<string, string>, body: string): strin
   return `---\n${lines}\n---\n${body}`;
 }
 
-// ── Event Storage ──────────────────────────────────────────────────
+// ── Story Storage ──────────────────────────────────────────────────
 
-export class EventStorage {
+export class StoryStorage {
   constructor(private readonly storage: ContentStorage) {}
 
   // ── Summary files ──────────────────────────────────────────────
@@ -56,10 +56,10 @@ export class EventStorage {
     await writeFile(absPath, markdown, "utf-8");
   }
 
-  // ── Event documents ────────────────────────────────────────────
+  // ── Story documents ────────────────────────────────────────────
 
-  /** Write an event document to events/{id}.md */
-  async writeEventDocument(sessionId: string, doc: EventDocument): Promise<void> {
+  /** Write a story document to stories/{id}.md */
+  async writeStoryDocument(sessionId: string, doc: StoryDocument): Promise<void> {
     const meta: Record<string, string> = {
       id: doc.id,
       status: doc.status,
@@ -89,17 +89,17 @@ export class EventStorage {
     ].join("\n");
 
     const content = serializeFrontmatter(meta, body);
-    const absPath = this.storage.resolvePath(sessionId, `events/${doc.id}.md`);
+    const absPath = this.storage.resolvePath(sessionId, `stories/${doc.id}.md`);
     await mkdir(join(absPath, ".."), { recursive: true });
     await writeFile(absPath, content, "utf-8");
   }
 
-  /** Read an event document from disk. */
-  async readEventDocument(sessionId: string, eventId: string): Promise<EventDocument | undefined> {
+  /** Read a story document from disk. */
+  async readStoryDocument(sessionId: string, storyId: string): Promise<StoryDocument | undefined> {
     try {
-      const absPath = this.storage.resolvePath(sessionId, `events/${eventId}.md`);
+      const absPath = this.storage.resolvePath(sessionId, `stories/${storyId}.md`);
       const raw = await readFile(absPath, "utf-8");
-      return parseEventDocument(raw);
+      return parseStoryDocument(raw);
     } catch {
       return undefined;
     }
@@ -116,15 +116,13 @@ export class EventStorage {
       lastUpdated: new Date(doc.lastUpdated).toISOString(),
     };
 
-    const dimLabel = { subject: "Subject", type: "Type", scenario: "Scenario" }[doc.dimension];
-
     const body = [
       `# ${doc.name}\n`,
       `## Description\n`,
       doc.description + "\n",
-      `## Events\n`,
-      ...doc.eventIds.map((eid) => `- [[${eid}]]`),
-      doc.eventIds.length === 0 ? "- (none)" : "",
+      `## Stories\n`,
+      ...doc.storyIds.map((sid) => `- [[${sid}]]`),
+      doc.storyIds.length === 0 ? "- (none)" : "",
       `\n## Related Entities\n`,
       ...doc.relatedEntities.map(
         (re) => `- [[${re.dimension}:${re.name}]]`,
@@ -156,20 +154,20 @@ export class EventStorage {
     }
   }
 
-  /** List all event IDs on disk. */
-  async listEventIds(sessionId: string): Promise<string[]> {
+  /** List all story IDs on disk. */
+  async listStoryIds(sessionId: string): Promise<string[]> {
     try {
-      const dir = this.storage.resolvePath(sessionId, "events");
+      const dir = this.storage.resolvePath(sessionId, "stories");
       const files = await readdir(dir);
       return files
-        .filter((f) => f.startsWith("evt-") && f.endsWith(".md"))
+        .filter((f) => f.startsWith("story-") && f.endsWith(".md"))
         .map((f) => f.replace(/\.md$/, ""));
     } catch {
       return [];
     }
   }
 
-  /** Read a summary file and extract sections for event context. */
+  /** Read a summary file and extract sections for story context. */
   async readSummaryPartials(
     sessionId: string,
     relPath: string,
@@ -196,7 +194,7 @@ export class EventStorage {
 
 // ── Parse helpers ──────────────────────────────────────────────────
 
-function parseEventDocument(raw: string): EventDocument {
+function parseStoryDocument(raw: string): StoryDocument {
   const { meta, body } = parseFrontmatter(raw);
 
   // Extract attributes from wiki links in the body
@@ -205,7 +203,7 @@ function parseEventDocument(raw: string): EventDocument {
   const scenarioMatch = body.match(/\[\[scenario:([^\]]+)\]\]/);
 
   // Extract sources from table rows
-  const sources: EventDocument["sources"] = [];
+  const sources: StoryDocument["sources"] = [];
   const sourceRows = body.matchAll(/\|\s*(\d+)\s*\|\s*\[\[([^\]]+)\]\]\s*\|\s*(\d+)\s*-\s*(\d+)\s*\|\s*([^\|]*)\|\s*([^\|]*)\|/g);
   for (const m of sourceRows) {
     sources.push({
@@ -229,7 +227,7 @@ function parseEventDocument(raw: string): EventDocument {
       scenario: scenarioMatch?.[1] || "通用",
     },
     sources,
-    status: (meta.status as EventDocument["status"]) || "active",
+    status: (meta.status as StoryDocument["status"]) || "active",
     narrative: narrativeMatch?.[1]?.trim() || "",
     createdAt: meta.created ? Date.parse(meta.created) : Date.now(),
     lastUpdated: meta.lastUpdated ? Date.parse(meta.lastUpdated) : Date.now(),
@@ -239,8 +237,8 @@ function parseEventDocument(raw: string): EventDocument {
 function parseEntityDocument(raw: string): EntityDocument {
   const { meta, body } = parseFrontmatter(raw);
 
-  // Extract event IDs from [[evt-xxx]] links
-  const eventIds = [...body.matchAll(/\[\[(evt-[^\]]+)\]\]/g)].map((m) => m[1]);
+  // Extract story IDs from [[story-xxx]] links
+  const storyIds = [...body.matchAll(/\[\[(story-[^\]]+)\]\]/g)].map((m) => m[1]);
 
   // Extract description
   const descMatch = body.match(/## Description\s*\n([\s\S]*?)(?=\n## )/);
@@ -260,7 +258,7 @@ function parseEntityDocument(raw: string): EntityDocument {
     dimension: (meta.dimension as EntityDocument["dimension"]) || "subject",
     name: meta.name || "",
     description: desc,
-    eventIds,
+    storyIds,
     relatedEntities,
     createdAt: meta.created ? Date.parse(meta.created) : Date.now(),
     lastUpdated: meta.lastUpdated ? Date.parse(meta.lastUpdated) : Date.now(),

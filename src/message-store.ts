@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS state (
 
 CREATE INDEX IF NOT EXISTS idx_windows_start ON windows(start_seq);
 
-CREATE TABLE IF NOT EXISTS events (
+CREATE TABLE IF NOT EXISTS stories (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   subject TEXT NOT NULL,
@@ -48,14 +48,14 @@ CREATE TABLE IF NOT EXISTS events (
   last_updated INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS event_sources (
-  event_id TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS story_sources (
+  story_id TEXT NOT NULL,
   summary_path TEXT NOT NULL,
   msg_start INTEGER NOT NULL,
   msg_end INTEGER NOT NULL,
   timestamp INTEGER NOT NULL,
   snippet TEXT DEFAULT '',
-  FOREIGN KEY (event_id) REFERENCES events(id)
+  FOREIGN KEY (story_id) REFERENCES stories(id)
 );
 
 CREATE TABLE IF NOT EXISTS entities (
@@ -67,18 +67,18 @@ CREATE TABLE IF NOT EXISTS entities (
   PRIMARY KEY (dimension, name)
 );
 
-CREATE TABLE IF NOT EXISTS event_entities (
-  event_id TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS story_entities (
+  story_id TEXT NOT NULL,
   dimension TEXT NOT NULL,
   entity_name TEXT NOT NULL,
-  PRIMARY KEY (event_id, dimension)
+  PRIMARY KEY (story_id, dimension)
 );
 
 CREATE TABLE IF NOT EXISTS processed_summaries (
   path TEXT PRIMARY KEY
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(id, title, subject, type, scenario, narrative);
+CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
 `;
 
 type MessageRow = {
@@ -182,8 +182,8 @@ export class MessageStore {
     db.transaction(() => {
       upsert.run("activeEnd", String(state.activeEnd));
       upsert.run("lastProcessedIdx", String(state.lastProcessedIdx));
-      upsert.run("focusedEventId", state.focusedEventId ?? "");
-      upsert.run("activeEvents", JSON.stringify(state.activeEvents));
+      upsert.run("focusedStoryId", state.focusedStoryId ?? "");
+      upsert.run("activeStories", JSON.stringify(state.activeStories));
       upsert.run("seenReads", JSON.stringify([...state.seenReads.entries()]));
       upsert.run("version", "1");
     })();
@@ -249,9 +249,9 @@ export class MessageStore {
         compressedWindows,
         activeEnd: parseInt(get("activeEnd") || "0", 10),
         lastProcessedIdx: parseInt(get("lastProcessedIdx") || "0", 10),
-        focusedEventId: get("focusedEventId") || null,
+        focusedStoryId: get("focusedStoryId") || get("focusedEventId") || null,
         seenReads: new Map(seenReadsArr),
-        activeEvents: JSON.parse(get("activeEvents") || "[]"),
+        activeStories: JSON.parse(get("activeStories") || get("activeEvents") || "[]"),
       };
     } finally {
       db.close();

@@ -18,7 +18,8 @@ const DEFAULTS: SmartContextConfig = {
   contentFilters: [],
   compactCoreTokens: 6000,
   compactOverlapTokens: 1000,
-  recentEventCount: 10,
+  recentStoryCount: 10,
+  recentSummaryCount: 3,
   sessionFilter: "main",
 };
 
@@ -45,7 +46,8 @@ export function resolveConfig(
     contentFilters: parseContentFilters(src.contentFilters),
     compactCoreTokens: positiveInt(src.compactCoreTokens, DEFAULTS.compactCoreTokens),
     compactOverlapTokens: positiveInt(src.compactOverlapTokens, DEFAULTS.compactOverlapTokens),
-    recentEventCount: positiveInt(src.recentEventCount, DEFAULTS.recentEventCount),
+    recentStoryCount: positiveInt(src.recentStoryCount, DEFAULTS.recentStoryCount),
+    recentSummaryCount: positiveInt(src.recentSummaryCount, DEFAULTS.recentSummaryCount),
     sessionFilter: parseSessionFilter(src.sessionFilter),
   };
 }

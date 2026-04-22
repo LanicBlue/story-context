@@ -204,7 +204,7 @@ async function runPipeline(
     // AfterTurn: strip metadata, apply filters, MicroCompact old tool results
     await engine.afterTurn({ sessionId, sessionFile: "" });
 
-    // Compact: compress and extract events
+    // Compact: compress and extract stories
     const cr = await engine.compact({ sessionId, sessionFile: "" });
     if (cr.compacted) compactCount++;
 
@@ -214,7 +214,7 @@ async function runPipeline(
       console.log(
         `[Batch ${batchNum}/${totalBatches}] compactions=${compactCount}, ` +
         `windows=${state?.compressedWindows.length ?? 0}, ` +
-        `events=${state?.activeEvents.length ?? 0}, ` +
+        `stories=${state?.activeStories.length ?? 0}, ` +
         `msgs processed=${i + batch.length}/${messages.length}`,
       );
     }
@@ -230,7 +230,7 @@ async function runPipeline(
   console.log(`\n=== Final State ===`);
   console.log(`Messages remaining: ${state.messages.length}`);
   console.log(`Compressed windows: ${state.compressedWindows.length}`);
-  console.log(`Active events: ${state.activeEvents.length}`);
+  console.log(`Active stories: ${state.activeStories.length}`);
   console.log(`Assemble: ${assembleResult.messages.length} msgs, ${assembleResult.estimatedTokens} tokens`);
   if (assembleResult.systemPromptAddition) {
     console.log(`systemPromptAddition: ${assembleResult.systemPromptAddition.length} chars`);
@@ -255,7 +255,7 @@ describe("Phase A: LLM smoke test", () => {
   const storageDir = cleanTestDir("phase-a");
 
   it(
-    "smoke test: 200 messages with LLM compression and event extraction",
+    "smoke test: 200 messages with LLM compression and story extraction",
     async () => {
       const { messages, totalTokens } = loadConversation(1, { limit: 200 });
       console.log(`\n[Phase A] Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens)`);
@@ -279,12 +279,12 @@ describe("Phase A: LLM smoke test", () => {
         }
       }
 
-      const eventsDir = join(storageDir, "conv-1", "events");
-      if (existsSync(eventsDir)) {
-        const files = readdirSync(eventsDir);
+      const storiesDir = join(storageDir, "conv-1", "stories");
+      if (existsSync(storiesDir)) {
+        const files = readdirSync(storiesDir);
         if (files.length > 0) {
-          const sample = readFileSync(join(eventsDir, files[0]), "utf-8");
-          console.log(`\n--- Sample event: ${files[0]} (first 1000 chars) ---`);
+          const sample = readFileSync(join(storiesDir, files[0]), "utf-8");
+          console.log(`\n--- Sample story: ${files[0]} (first 1000 chars) ---`);
           console.log(sample.slice(0, 1000));
         }
       }
@@ -310,14 +310,14 @@ describe("Phase B: medium scale stability", () => {
 
       expect(state.compressedWindows.length).toBeGreaterThan(5);
 
-      const eventsDir = join(storageDir, "conv-1", "events");
-      if (existsSync(eventsDir)) {
+      const storiesDir = join(storageDir, "conv-1", "stories");
+      if (existsSync(storiesDir)) {
         const subjects = new Set<string>();
         const types = new Set<string>();
         const scenarios = new Set<string>();
 
-        for (const file of readdirSync(eventsDir)) {
-          const content = readFileSync(join(eventsDir, file), "utf-8");
+        for (const file of readdirSync(storiesDir)) {
+          const content = readFileSync(join(storiesDir, file), "utf-8");
           const subjectMatch = content.match(/^subject:\s*(.+)$/m);
           const typeMatch = content.match(/^type:\s*(.+)$/m);
           const scenarioMatch = content.match(/^scenario:\s*(.+)$/m);

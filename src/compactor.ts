@@ -1,9 +1,9 @@
 import type { Summarizer, CompressedWindow } from "./types.js";
 import { ContentStorage } from "./content-storage.js";
-import { EventStorage } from "./event-storage.js";
+import { StoryStorage } from "./story-storage.js";
 
 const COMPACT_SYSTEM_PROMPT =
-  "You are a conversation compression engine. Categorize conversation content by event elements, output pure Markdown. Only record valuable information; omit conversational filler and repetition. /no_think";
+  "You are a conversation compression engine. Categorize conversation content by story elements, output pure Markdown. Only record valuable information; omit conversational filler and repetition. /no_think";
 
 const COMPACT_USER_TEMPLATE = `The following are consecutive conversation segments. Compress the [Core Content] section in the middle.
 
@@ -45,13 +45,13 @@ export type CompressionWindow = {
 };
 
 export class Compactor {
-  private readonly eventStorage: EventStorage;
+  private readonly storyStorage: StoryStorage;
 
   constructor(
     private readonly storage: ContentStorage,
     private readonly summarizer?: Summarizer,
   ) {
-    this.eventStorage = new EventStorage(storage);
+    this.storyStorage = new StoryStorage(storage);
   }
 
   /** Build a compression window from the oldest active messages. */
@@ -211,8 +211,8 @@ export class Compactor {
     messageRange: [number, number],
     originalChars: number,
   ): Promise<CompressedWindow> {
-    const relPath = await this.eventStorage.nextSummaryName(sessionId);
-    await this.eventStorage.writeSummary(sessionId, relPath, markdown);
+    const relPath = await this.storyStorage.nextSummaryName(sessionId);
+    await this.storyStorage.writeSummary(sessionId, relPath, markdown);
 
     return {
       storagePath: relPath,
@@ -223,9 +223,9 @@ export class Compactor {
     };
   }
 
-  /** Get the EventStorage instance for use by engine. */
-  getEventStorage(): EventStorage {
-    return this.eventStorage;
+  /** Get the StoryStorage instance for use by engine. */
+  getStoryStorage(): StoryStorage {
+    return this.storyStorage;
   }
 }
 

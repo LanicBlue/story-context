@@ -66,7 +66,7 @@ describe("SmartContextEngine basics", () => {
     expect(engine._getState(SID)!.seenReads.has("bar.ts")).toBe(false);
   });
 
-  it("initializes session state with focusedEventId null", async () => {
+  it("initializes session state with focusedStoryId null", async () => {
     const engine = new SmartContextEngine();
     await engine.ingest({
       sessionId: SID,
@@ -75,7 +75,7 @@ describe("SmartContextEngine basics", () => {
     const state = engine._getState(SID)!;
     expect(state.activeEnd).toBe(0);
     expect(state.compressedWindows).toEqual([]);
-    expect(state.focusedEventId).toBeNull();
+    expect(state.focusedStoryId).toBeNull();
   });
 
   it("isolates different sessions", async () => {
@@ -159,7 +159,7 @@ describe("SmartContextEngine assemble", () => {
     expect(result.messages.length).toBe(3);
   });
 
-  it("includes event context in systemPromptAddition after compaction", async () => {
+  it("includes story context in systemPromptAddition after compaction", async () => {
     const engine = new SmartContextEngine({
       maxHistoryTokens: 125, // 500 chars
       compactCoreTokens: 75, // 300 chars
@@ -417,28 +417,28 @@ describe("SmartContextEngine session filtering", () => {
   });
 });
 
-describe("SmartContextEngine focus events", () => {
-  it("focusEvent sets focusedEventId on session state", () => {
+describe("SmartContextEngine focus stories", () => {
+  it("focusStory sets focusedStoryId on session state", () => {
     const engine = new SmartContextEngine();
     // Must ingest first to create state
     engine.ingest({
       sessionId: SID,
       message: makeMessage("user", "test"),
     });
-    engine.focusEvent(SID, "evt-abc123");
+    engine.focusStory(SID, "story-abc123");
     const state = engine._getState(SID)!;
-    expect(state.focusedEventId).toBe("evt-abc123");
+    expect(state.focusedStoryId).toBe("story-abc123");
   });
 
-  it("unfocusEvent clears focusedEventId", () => {
+  it("unfocusStory clears focusedStoryId", () => {
     const engine = new SmartContextEngine();
     engine.ingest({
       sessionId: SID,
       message: makeMessage("user", "test"),
     });
-    engine.focusEvent(SID, "evt-abc123");
-    engine.unfocusEvent(SID);
+    engine.focusStory(SID, "story-abc123");
+    engine.unfocusStory(SID);
     const state = engine._getState(SID)!;
-    expect(state.focusedEventId).toBeNull();
+    expect(state.focusedStoryId).toBeNull();
   });
 });

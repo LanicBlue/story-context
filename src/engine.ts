@@ -3,11 +3,11 @@ import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
 import { ContentProcessor } from "./content-processor.js";
 import { ContentStorage } from "./content-storage.js";
 import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { extractEventsStructural, extractEventsWithLLM } from "./event-extractor.js";
-import { EventIndexManager } from "./event-index.js";
-import { EventStorage } from "./event-storage.js";
+import { extractStoriesStructural, extractStoriesWithLLM } from "./story-extractor.js";
+import { StoryIndexManager } from "./story-index.js";
+import { StoryStorage } from "./story-storage.js";
 import { MessageStore } from "./message-store.js";
-import type { EventSummary, EventDocument, EntityDocument } from "./event-types.js";
+import type { StorySummary, StoryDocument, EntityDocument } from "./story-types.js";
 
 // ContextEngine types — openclaw exposes these via the plugin-sdk surface.
 export type AssembleResult = {
@@ -62,15 +62,15 @@ export class SmartContextEngine {
   private readonly contentProcessor: ContentProcessor;
   private readonly storage: ContentStorage;
   private readonly compactor: Compactor;
-  private readonly eventManagers = new Map<string, EventIndexManager>();
-  private readonly eventStorage: EventStorage;
+  private readonly storyManagers = new Map<string, StoryIndexManager>();
+  private readonly storyStorage: StoryStorage;
   private readonly messageStore: MessageStore;
 
   constructor(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
     this.config = resolveConfig(config);
     this.summarizer = summarizer;
     this.storage = new ContentStorage(this.config.storageDir || undefined);
-    this.eventStorage = new EventStorage(this.storage);
+    this.storyStorage = new StoryStorage(this.storage);
     this.contentProcessor = new ContentProcessor(
       {
         largeTextThreshold: this.config.largeTextThreshold,
@@ -95,14 +95,14 @@ export class SmartContextEngine {
         messages: [],
         compressedWindows: [],
         activeEnd: 0,
-        focusedEventId: null,
+        focusedStoryId: null,
         seenReads: new Map(),
-        eventIndex: {
+        storyIndex: {
           documents: new Map(),
           entities: new Map(),
           processedSummaries: new Set(),
         },
-        activeEvents: [],
+        activeStories: [],
         lastProcessedIdx: 0,
       };
       this.sessions.set(sessionId, s);
@@ -144,13 +144,13 @@ export class SmartContextEngine {
     );
   }
 
-  private getEventManager(sessionId: string): EventIndexManager {
-    let mgr = this.eventManagers.get(sessionId);
+  private getStoryManager(sessionId: string): StoryIndexManager {
+    let mgr = this.storyManagers.get(sessionId);
     if (!mgr) {
       const db = this.messageStore.getDb(sessionId);
-      const eventStorage = this.compactor.getEventStorage();
-      mgr = new EventIndexManager(db, eventStorage, sessionId, this.summarizer);
-      this.eventManagers.set(sessionId, mgr);
+      const storyStorage = this.compactor.getStoryStorage();
+      mgr = new StoryIndexManager(db, storyStorage, sessionId, this.summarizer);
+      this.storyManagers.set(sessionId, mgr);
     }
     return mgr;
   }
@@ -290,40 +290,40 @@ export class SmartContextEngine {
     this.messageStore.saveState(params.sessionId, s);
   }
 
-  // ── Event Focus ─────────────────────────────────────────────────
+  // ── Story Focus ─────────────────────────────────────────────────
 
-  /** Set the focused event for a session (tool-call or explicit). */
-  focusEvent(sessionId: string, eventId: string): void {
+  /** Set the focused story for a session (tool-call or explicit). */
+  focusStory(sessionId: string, storyId: string): void {
     const s = this.state(sessionId);
-    s.focusedEventId = eventId;
+    s.focusedStoryId = storyId;
   }
 
   /** Clear focus, returning to auto-detect mode. */
-  unfocusEvent(sessionId: string): void {
+  unfocusStory(sessionId: string): void {
     const s = this.state(sessionId);
-    s.focusedEventId = null;
+    s.focusedStoryId = null;
   }
 
-  /** Resolve the current focus event: explicit > auto-detect > none. */
-  private resolveFocusEvent(sessionId: string): EventDocument | undefined {
-    let mgr: EventIndexManager;
+  /** Resolve the current focus story: explicit > auto-detect > none. */
+  private resolveFocusStory(sessionId: string): StoryDocument | undefined {
+    let mgr: StoryIndexManager;
     try {
-      mgr = this.getEventManager(sessionId);
+      mgr = this.getStoryManager(sessionId);
     } catch {
       return undefined;
     }
 
     const s = this.state(sessionId);
 
-    if (s.focusedEventId) {
-      const doc = mgr.getAllEvents().find((e) => e.id === s.focusedEventId);
+    if (s.focusedStoryId) {
+      const doc = mgr.getAllStories().find((e) => e.id === s.focusedStoryId);
       if (doc) return doc;
     }
 
-    const active = mgr.getActiveEvents();
+    const active = mgr.getActiveStories();
     if (active.length > 0) return active[0];
 
-    const all = mgr.getAllEvents()
+    const all = mgr.getAllStories()
       .filter((e) => e.status !== "active")
       .sort((a, b) => b.lastUpdated - a.lastUpdated);
     return all[0];
@@ -367,11 +367,14 @@ export class SmartContextEngine {
 
     const systemParts: string[] = [];
 
-    const focusContext = await this.buildFocusEventContext(params.sessionId);
+    const focusContext = await this.buildFocusStoryContext(params.sessionId);
     if (focusContext) systemParts.push(focusContext);
 
-    const recentEvents = await this.buildRecentEvents(params.sessionId);
-    if (recentEvents) systemParts.push(recentEvents);
+    const recentStories = await this.buildRecentStories(params.sessionId);
+    if (recentStories) systemParts.push(recentStories);
+
+    const recentSummaries = await this.buildRecentSummaries(params.sessionId, s);
+    if (recentSummaries) systemParts.push(recentSummaries);
 
     const estimatedTokens = Math.ceil(
       (totalChars + systemParts.join("\n").length) / CHARS_PER_TOKEN,
@@ -384,32 +387,32 @@ export class SmartContextEngine {
     };
   }
 
-  /** Build Layer 1: focus event full detail + entity descriptions. */
-  private async buildFocusEventContext(sessionId: string): Promise<string | undefined> {
-    const focusEvent = this.resolveFocusEvent(sessionId);
-    if (!focusEvent) return undefined;
+  /** Build Layer 1: focus story full detail + entity descriptions. */
+  private async buildFocusStoryContext(sessionId: string): Promise<string | undefined> {
+    const focusStory = this.resolveFocusStory(sessionId);
+    if (!focusStory) return undefined;
 
-    let mgr: EventIndexManager;
+    let mgr: StoryIndexManager;
     try {
-      mgr = this.getEventManager(sessionId);
+      mgr = this.getStoryManager(sessionId);
     } catch {
       return undefined;
     }
 
     const parts: string[] = [];
-    parts.push(`## Current Focus: [[${focusEvent.id}]] ${focusEvent.title}`);
+    parts.push(`## Current Focus: [[${focusStory.id}]] ${focusStory.title}`);
     parts.push("");
     parts.push("### Attributes");
-    parts.push(`- Subject: [[subject:${focusEvent.attributes.subject}]]`);
-    parts.push(`- Type: [[type:${focusEvent.attributes.type}]]`);
-    parts.push(`- Scenario: [[scenario:${focusEvent.attributes.scenario}]]`);
+    parts.push(`- Subject: [[subject:${focusStory.attributes.subject}]]`);
+    parts.push(`- Type: [[type:${focusStory.attributes.type}]]`);
+    parts.push(`- Scenario: [[scenario:${focusStory.attributes.scenario}]]`);
     parts.push("");
-    parts.push(`### Status: ${focusEvent.status}`);
+    parts.push(`### Status: ${focusStory.status}`);
     parts.push("");
     parts.push("### Narrative (full)");
-    parts.push(focusEvent.narrative.slice(-2000));
+    parts.push(focusStory.narrative.slice(-2000));
 
-    const summaryDetails = await this.extractSummaryDetails(sessionId, focusEvent);
+    const summaryDetails = await this.extractSummaryDetails(sessionId, focusStory);
     if (summaryDetails.task) {
       parts.push("", "### Task");
       for (const line of summaryDetails.task.split("\n")) {
@@ -431,14 +434,14 @@ export class SmartContextEngine {
       }
     }
 
-    if (focusEvent.sources.length > 0) {
+    if (focusStory.sources.length > 0) {
       parts.push("", "### Sources");
-      for (const src of focusEvent.sources) {
+      for (const src of focusStory.sources) {
         parts.push(`- ${src.summaryPath} (msg ${src.messageRange[0]}-${src.messageRange[1]})`);
       }
     }
 
-    const entityParts = await this.buildEntityDescriptions(mgr, focusEvent);
+    const entityParts = await this.buildEntityDescriptions(mgr, focusStory);
     if (entityParts) {
       parts.push("", "## Entity Context");
       parts.push(entityParts);
@@ -449,12 +452,12 @@ export class SmartContextEngine {
 
   private async extractSummaryDetails(
     sessionId: string,
-    event: EventDocument,
+    story: StoryDocument,
   ): Promise<{ task: string; files: string[]; operations: Array<{ op: string; target: string; result: string }> }> {
     const result = { task: "", files: [] as string[], operations: [] as Array<{ op: string; target: string; result: string }> };
 
-    for (const src of event.sources.slice(-3)) {
-      const partials = await this.eventStorage.readSummaryPartials(sessionId, src.summaryPath);
+    for (const src of story.sources.slice(-3)) {
+      const partials = await this.storyStorage.readSummaryPartials(sessionId, src.summaryPath);
       if (partials.task && !result.task) {
         result.task = partials.task;
       }
@@ -468,13 +471,13 @@ export class SmartContextEngine {
   }
 
   private async buildEntityDescriptions(
-    mgr: EventIndexManager,
-    event: EventDocument,
+    mgr: StoryIndexManager,
+    story: StoryDocument,
   ): Promise<string | undefined> {
     const dims: Array<["subject" | "type" | "scenario", string]> = [
-      ["subject", event.attributes.subject],
-      ["type", event.attributes.type],
-      ["scenario", event.attributes.scenario],
+      ["subject", story.attributes.subject],
+      ["type", story.attributes.type],
+      ["scenario", story.attributes.scenario],
     ];
 
     const parts: string[] = [];
@@ -489,37 +492,37 @@ export class SmartContextEngine {
     return parts.length > 0 ? parts.join("\n") : undefined;
   }
 
-  /** Build Layer 2: recent event summaries. */
-  private async buildRecentEvents(sessionId: string): Promise<string | undefined> {
-    let mgr: EventIndexManager;
+  /** Build Layer 2: recent story summaries. */
+  private async buildRecentStories(sessionId: string): Promise<string | undefined> {
+    let mgr: StoryIndexManager;
     try {
-      mgr = this.getEventManager(sessionId);
+      mgr = this.getStoryManager(sessionId);
     } catch {
       return undefined;
     }
 
-    const allEvents = mgr.getAllEvents();
-    if (allEvents.length === 0) return undefined;
+    const allStories = mgr.getAllStories();
+    if (allStories.length === 0) return undefined;
 
-    const focusEvent = this.resolveFocusEvent(sessionId);
-    const recentCount = this.config.recentEventCount;
+    const focusStory = this.resolveFocusStory(sessionId);
+    const recentCount = this.config.recentStoryCount;
 
-    const recent = allEvents
-      .filter((e) => !focusEvent || e.id !== focusEvent.id)
+    const recent = allStories
+      .filter((e) => !focusStory || e.id !== focusStory.id)
       .sort((a, b) => b.lastUpdated - a.lastUpdated)
       .slice(0, recentCount);
 
     if (recent.length === 0) return undefined;
 
-    const parts: string[] = ["## Recent Events"];
-    for (const evt of recent) {
-      const narrativeTail = evt.narrative.slice(-500);
-      const sourcesStr = evt.sources
+    const parts: string[] = ["## Recent Stories"];
+    for (const s of recent) {
+      const narrativeTail = s.narrative.slice(-500);
+      const sourcesStr = s.sources
         .slice(-2)
-        .map((s) => s.summaryPath)
+        .map((src) => src.summaryPath)
         .join(", ");
       parts.push("");
-      parts.push(`- [[${evt.id}]] ${evt.title} (${evt.status})`);
+      parts.push(`- [[${s.id}]] ${s.title} (${s.status})`);
       parts.push(`  ${this.clip(narrativeTail.replace(/\n/g, " "), 200)}`);
       if (sourcesStr) {
         parts.push(`  Sources: ${sourcesStr}`);
@@ -527,6 +530,25 @@ export class SmartContextEngine {
     }
 
     return parts.join("\n");
+  }
+
+  /** Build Layer 3: recent summary contents for continuity. */
+  private async buildRecentSummaries(sessionId: string, s: SessionState): Promise<string | undefined> {
+    const count = this.config.recentSummaryCount;
+    if (count <= 0 || s.compressedWindows.length === 0) return undefined;
+
+    const recentWindows = s.compressedWindows.slice(-count);
+    const parts: string[] = ["## Recent Summaries"];
+
+    for (const win of recentWindows) {
+      const content = await this.storyStorage.readSummaryContent(sessionId, win.storagePath);
+      if (!content) continue;
+      parts.push("");
+      parts.push(`### ${win.storagePath} (msg ${win.messageRange[0]}-${win.messageRange[1]})`);
+      parts.push(content);
+    }
+
+    return parts.length > 1 ? parts.join("\n") : undefined;
   }
 
   // ── compact ─────────────────────────────────────────────────────
@@ -554,7 +576,7 @@ export class SmartContextEngine {
     }
 
     const tokensBefore = Math.ceil(totalChars / CHARS_PER_TOKEN);
-    const eventMgr = this.getEventManager(params.sessionId);
+    const storyMgr = this.getStoryManager(params.sessionId);
 
     const coreChars = this.config.compactCoreTokens * CHARS_PER_TOKEN;
     const overlapChars = this.config.compactOverlapTokens * CHARS_PER_TOKEN;
@@ -579,8 +601,8 @@ export class SmartContextEngine {
       }
 
       let markdown: string;
-      let eventSummaries: EventSummary[];
-      const knownDimensions = eventMgr.getKnownDimensions();
+      let storySummaries: StorySummary[];
+      const knownDimensions = storyMgr.getKnownDimensions();
       const dims = knownDimensions.subjects.length > 0 ? knownDimensions : undefined;
 
       if (this.summarizer) {
@@ -588,7 +610,7 @@ export class SmartContextEngine {
           .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
           .join("\n\n");
         try {
-          const { rawOutput, events: llmEvents } = await extractEventsWithLLM(
+          const { rawOutput, stories: llmStories } = await extractStoriesWithLLM(
             nonDroppedCore,
             window.preOverlap,
             window.postOverlap,
@@ -598,21 +620,21 @@ export class SmartContextEngine {
             dims,
           );
           markdown = rawOutput;
-          eventSummaries = llmEvents;
+          storySummaries = llmStories;
         } catch {
           markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
-          eventSummaries = extractEventsStructural(
+          storySummaries = extractStoriesStructural(
             nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
           );
         }
       } else {
         markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
-        eventSummaries = extractEventsStructural(
+        storySummaries = extractStoriesStructural(
           nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
         );
       }
 
-      if (eventSummaries.length === 0 && markdown.trim().length === 0) {
+      if (storySummaries.length === 0 && markdown.trim().length === 0) {
         s.activeEnd = window.coreEndIdx;
         totalChars = this.totalActiveChars(s);
         continue;
@@ -625,7 +647,7 @@ export class SmartContextEngine {
         window.coreTotalChars,
       );
 
-      eventSummaries = eventSummaries.map((e) => ({ ...e, sourceSummary: compressed.storagePath }));
+      storySummaries = storySummaries.map((e) => ({ ...e, sourceSummary: compressed.storagePath }));
 
       // Record window range in DB (messages already stored by ingest, no duplication)
       this.messageStore.addWindow(params.sessionId, compressed);
@@ -633,9 +655,9 @@ export class SmartContextEngine {
       s.compressedWindows.push(compressed);
       s.activeEnd = window.coreEndIdx;
 
-      if (eventSummaries.length > 0) {
-        await eventMgr.processSummaries(eventSummaries);
-        s.activeEvents = eventMgr.getActiveEvents().map((e) => e.id);
+      if (storySummaries.length > 0) {
+        await storyMgr.processSummaries(storySummaries);
+        s.activeStories = storyMgr.getActiveStories().map((e) => e.id);
       }
 
       totalChars = this.totalActiveChars(s);
@@ -670,7 +692,7 @@ export class SmartContextEngine {
       return {
         bootstrapped: true,
         importedMessages: loaded.messages.length,
-        reason: `restored from disk (${loaded.compressedWindows.length} compressed windows, ${loaded.activeEvents.length} active events)`,
+        reason: `restored from disk (${loaded.compressedWindows.length} compressed windows, ${loaded.activeStories.length} active stories)`,
       };
     }
 
@@ -689,12 +711,12 @@ export class SmartContextEngine {
       }
     }
 
-    for (const mgr of this.eventManagers.values()) {
+    for (const mgr of this.storyManagers.values()) {
       mgr.close();
     }
-    this.eventManagers.clear();
+    this.storyManagers.clear();
 
-    // Close all DBs after event managers are done
+    // Close all DBs after story managers are done
     this.messageStore.closeAll();
 
     this.sessions.clear();

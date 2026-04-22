@@ -168,7 +168,7 @@ describe("SmartContextEngine with lcm.db data", () => {
           if (compactCount % 10 === 0) {
             console.log(
               `Batch ${Math.floor(i / BATCH) + 1}: windows=${state.compressedWindows.length}, ` +
-              `events=${state.activeEvents.length}`,
+              `stories=${state.activeStories.length}`,
             );
           }
         }
@@ -178,7 +178,7 @@ describe("SmartContextEngine with lcm.db data", () => {
       console.log(`\n=== Final State ===`);
       console.log(`Messages: ${state.messages.length}`);
       console.log(`Compressed windows: ${state.compressedWindows.length}`);
-      console.log(`Active events: ${state.activeEvents.length}`);
+      console.log(`Active stories: ${state.activeStories.length}`);
 
       // Compression stats
       let totalOriginal = 0;
@@ -211,13 +211,13 @@ describe("SmartContextEngine with lcm.db data", () => {
         }
       }
 
-      // Show a sample event file
-      const eventsDir = join(TEST_OUTPUT_DIR, "conv-1", "events");
-      if (existsSync(eventsDir)) {
-        const files = readdirSync(eventsDir);
+      // Show a sample story file
+      const storiesDir = join(TEST_OUTPUT_DIR, "conv-1", "stories");
+      if (existsSync(storiesDir)) {
+        const files = readdirSync(storiesDir);
         if (files.length > 0) {
-          const sample = readFileSync(join(eventsDir, files[0]), "utf-8");
-          console.log(`\n--- Sample event: ${files[0]} (first 800 chars) ---`);
+          const sample = readFileSync(join(storiesDir, files[0]), "utf-8");
+          console.log(`\n--- Sample story: ${files[0]} (first 800 chars) ---`);
           console.log(sample.slice(0, 800));
         }
       }
