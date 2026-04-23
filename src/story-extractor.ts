@@ -6,16 +6,19 @@ import { extractText, extractRole, extractToolName, extractToolArg } from "./com
 
 export const STORY_EXTRACT_SYSTEM_PROMPT =
   "You are a conversation compression engine. /no_think\n" +
-  "Extract stories as JSON array. Each story:\n" +
-  '{ "subject": "<project/module name>", "type": "<category>", "scenario": "<context>", "content": "<narrative>" }\n\n' +
-  "Rules:\n" +
-  "- subject: the main entity (project name, module, concept, person), short and stable\n" +
-  "- type: pick from {软件开发|调研|部署|故障排查|讨论|分析|决策|配置|日常}, create new only if none fits\n" +
-  "- scenario: context (production, development, testing, configuration, etc.)\n" +
-  "- content: concise 2-3 sentence narrative, do NOT copy raw text or JSON\n" +
-  "- Omit tool output details, file contents, and API responses\n\n" +
-  "Output ONLY a JSON array, no markdown fences.\n" +
-  'Example: [{"subject":"XX项目","type":"软件开发","scenario":"Web应用","content":"实现了认证模块。"}]';
+  "[Schema]\n" +
+  "Extract stories as a JSON array. Each element:\n" +
+  '{ "subject": "<target entity>", "type": "<agent action>", "scenario": "<work domain>", "content": "<narrative>" }\n\n' +
+  "[Rules]\n" +
+  "- subject: the target entity the agent is working on (project name, system name, topic). Short, stable, noun phrase.\n" +
+  "- type: the agent's action. Pick ONE from {development|testing|execution|exploration|assistance|debugging|analysis|decision|configuration}. Create new only if none fits.\n" +
+  "- scenario: the work domain. Pick ONE from {software-engineering|data-engineering|system-ops|security|content-creation|knowledge-mgmt|user-interaction|general}.\n" +
+  "- content: concise 2-3 sentence narrative. Do NOT copy raw text or JSON.\n" +
+  "- Omit tool output details, file contents, and API responses.\n" +
+  "- Each field must be a SINGLE value. NO comma-separated lists.\n\n" +
+  "[Output]\n" +
+  "Output ONLY a JSON array. No markdown fences. No extra text.\n" +
+  'Example: [{"subject":"opinion-analysis","type":"development","scenario":"software-engineering","content":"Built a multi-platform crawler pipeline."}]';
 
 export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract stories.
 
@@ -33,7 +36,14 @@ Extract stories as JSON. Write narrative summaries, not raw text.`;
 export const SEMANTIC_MATCH_PROMPT =
   "Determine whether the attributes of the following two stories semantically match. " +
   "Values expressing the same concept with different wording also count as matching. " +
-  'Output JSON: {"subject": true/false, "type": true/false, "scenario": true/false}';
+  'Output JSON: {"match": true/false}';
+
+// ── Dimension Normalization ────────────────────────────────────────
+
+/** Normalize a dimension value: take first item from comma-separated lists. */
+export function normalizeDimensionValue(val: string): string {
+  return val.split(/[,，、]/)[0].trim() || val;
+}
 
 // ── Parse LLM Output ──────────────────────────────────────────────
 
@@ -63,9 +73,9 @@ export function parseStoryOrientedOutput(
     stories.push({
       content: content.trim(),
       attributes: {
-        subject: subject?.trim() || "未知",
-        type: type?.trim() || "对话",
-        scenario: scenario?.trim() || "通用",
+        subject: normalizeDimensionValue(subject?.trim() || "unknown"),
+        type: normalizeDimensionValue(type?.trim() || "assistance"),
+        scenario: normalizeDimensionValue(scenario?.trim() || "general"),
       },
       sourceSummary,
       messageRange,
@@ -77,7 +87,7 @@ export function parseStoryOrientedOutput(
   if (stories.length === 0 && markdown.trim()) {
     stories.push({
       content: markdown.trim(),
-      attributes: { subject: "未知", type: "对话", scenario: "通用" },
+      attributes: { subject: "unknown", type: "assistance", scenario: "general" },
       sourceSummary,
       messageRange,
       timestamp: Date.now(),
@@ -96,24 +106,34 @@ function parseStoryJsonOutput(
   let text = raw.trim();
   text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
 
+  // Try to find a JSON array
   const arrMatch = text.match(/\[[\s\S]*\]/);
-  if (!arrMatch) return [];
+  // If no array, try a single JSON object
+  const objMatch = !arrMatch ? text.match(/\{[\s\S]*\}/) : null;
+  if (!arrMatch && !objMatch) return [];
 
   try {
-    const arr = JSON.parse(arrMatch[0]) as Array<Record<string, unknown>>;
-    if (!Array.isArray(arr)) return [];
+    let arr: unknown[];
+    if (arrMatch) {
+      const parsed = JSON.parse(arrMatch[0]);
+      arr = Array.isArray(parsed) ? parsed : [parsed];
+    } else {
+      const parsed = JSON.parse(objMatch![0]);
+      arr = [parsed];
+    }
 
     const stories: StorySummary[] = [];
-    for (const item of arr) {
+    for (const raw of arr) {
+      const item = raw as Record<string, unknown>;
       const content = typeof item.content === "string" ? item.content.trim() : "";
       if (content.length < 5) continue;
 
       stories.push({
         content,
         attributes: {
-          subject: typeof item.subject === "string" ? item.subject.trim() : "未知",
-          type: typeof item.type === "string" ? item.type.trim() : "对话",
-          scenario: typeof item.scenario === "string" ? item.scenario.trim() : "通用",
+          subject: normalizeDimensionValue(typeof item.subject === "string" ? item.subject.trim() : "unknown"),
+          type: normalizeDimensionValue(typeof item.type === "string" ? item.type.trim() : "assistance"),
+          scenario: normalizeDimensionValue(typeof item.scenario === "string" ? item.scenario.trim() : "general"),
         },
         sourceSummary,
         messageRange,
@@ -144,6 +164,16 @@ function extractSection(text: string, heading: string): string | undefined {
   return captured.length > 0 ? captured.join("\n").trim() : undefined;
 }
 
+/** Format parsed stories as structured markdown for summary file output. */
+export function formatStoriesAsMarkdown(stories: StorySummary[]): string {
+  if (stories.length === 0) return "";
+
+  return stories.map((s, i) => {
+    const title = `${s.attributes.subject} — ${s.attributes.type} · ${s.attributes.scenario}`;
+    return `## ${i + 1}. ${title}\n\n${s.content}`;
+  }).join("\n\n---\n\n");
+}
+
 /** Extract stories using LLM, falling back to structural extraction on failure. */
 export async function extractStoriesWithLLM(
   coreMessages: unknown[],
@@ -172,7 +202,7 @@ export async function extractStoriesWithLLM(
       if (knownDimensions.types.length > 0) parts.push(`type: {${knownDimensions.types.join(", ")}}`);
       if (knownDimensions.scenarios.length > 0) parts.push(`scenario: {${knownDimensions.scenarios.join(", ")}}`);
       if (parts.length > 0) {
-        knownHint = `\n\n[Known Schema — MUST reuse existing values]\n${parts.join("\n")}\nRule: semantically similar MUST merge into existing values.`;
+        knownHint = `\n\n[Known Schema — MUST reuse existing values]\n${parts.join("\n")}\nRule: semantically similar MUST merge into existing values. Each field MUST be a SINGLE value.`;
       }
     }
 
@@ -294,7 +324,7 @@ function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensio
   ].filter(Boolean).join(" ").toLowerCase();
 
   // Subject: match against known values first
-  let subject = "未知";
+  let subject = "unknown";
   if (known && known.subjects.length > 0) {
     subject = matchKnown(allText, known.subjects) ?? inferSubject(files, userText);
   } else {
@@ -302,7 +332,7 @@ function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensio
   }
 
   // Type: match against known values first
-  let type = "对话";
+  let type = "assistance";
   if (known && known.types.length > 0) {
     type = matchKnown(allText, known.types) ?? inferType(hasWrite, hasShellError, files.size);
   } else {
@@ -310,7 +340,7 @@ function extractAttributesFromSegment(messages: unknown[], known?: KnownDimensio
   }
 
   // Scenario: match against known values first
-  let scenario = "通用";
+  let scenario = "general";
   if (known && known.scenarios.length > 0) {
     scenario = matchKnown(allText, known.scenarios) ?? inferScenario(files);
   } else {
@@ -346,21 +376,21 @@ function inferSubject(files: Set<string>, userText: string): string {
 }
 
 function inferType(hasWrite: boolean, hasShellError: boolean, fileCount: number): string {
-  if (hasWrite) return "软件开发";
-  if (hasShellError) return "故障排查";
-  if (fileCount > 0) return "调研";
-  return "对话";
+  if (hasWrite) return "development";
+  if (hasShellError) return "debugging";
+  if (fileCount > 0) return "exploration";
+  return "assistance";
 }
 
 function inferScenario(files: Set<string>): string {
   if (files.size > 0) {
     const allPaths = [...files].join(" ");
-    if (/test|spec/i.test(allPaths)) return "测试";
-    if (/config|setup/i.test(allPaths)) return "配置";
-    if (/deploy|ci|cd/i.test(allPaths)) return "部署";
-    return "开发环境";
+    if (/test|spec/i.test(allPaths)) return "software-engineering";
+    if (/config|setup/i.test(allPaths)) return "system-ops";
+    if (/deploy|ci|cd/i.test(allPaths)) return "system-ops";
+    return "software-engineering";
   }
-  return "通用";
+  return "general";
 }
 
 function extractCommonPrefix(paths: string[]): string {

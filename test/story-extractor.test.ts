@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   parseStoryOrientedOutput,
   extractStoriesStructural,
+  formatStoriesAsMarkdown,
+  normalizeDimensionValue,
 } from "../src/story-extractor.js";
 
 function makeMsg(role: string, content: string, extra?: Record<string, unknown>) {
@@ -15,60 +17,89 @@ function makeTool(toolName: string, content: string, args?: Record<string, unkno
 describe("parseStoryOrientedOutput", () => {
   it("parses JSON array output", () => {
     const json = JSON.stringify([{
-      subject: "XX项目",
-      type: "软件开发",
-      scenario: "Web应用",
-      content: "实现了用户认证模块，包括JWT token生成和验证",
+      subject: "opinion-analysis",
+      type: "development",
+      scenario: "software-engineering",
+      content: "Built a multi-platform crawler pipeline with webhook integration",
     }]);
 
     const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 5]);
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("XX项目");
-    expect(stories[0].attributes.type).toBe("软件开发");
-    expect(stories[0].attributes.scenario).toBe("Web应用");
-    expect(stories[0].content).toContain("认证模块");
+    expect(stories[0].attributes.subject).toBe("opinion-analysis");
+    expect(stories[0].attributes.type).toBe("development");
+    expect(stories[0].attributes.scenario).toBe("software-engineering");
+    expect(stories[0].content).toContain("crawler pipeline");
     expect(stories[0].sourceSummary).toBe("summaries/2026-04-21-0.md");
   });
 
   it("parses multiple stories from JSON array", () => {
     const json = JSON.stringify([
-      { subject: "XX项目", type: "软件开发", scenario: "Web应用", content: "实现了用户认证模块的功能开发" },
-      { subject: "XX项目", type: "调研", scenario: "技术选型", content: "对比了 JWT 和 session 方案的优缺点" },
+      { subject: "opinion-analysis", type: "development", scenario: "software-engineering", content: "Implemented authentication module with JWT support" },
+      { subject: "opinion-analysis", type: "exploration", scenario: "data-engineering", content: "Compared JWT and session-based approaches for API security" },
     ]);
 
     const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 10]);
     expect(stories).toHaveLength(2);
-    expect(stories[0].attributes.type).toBe("软件开发");
-    expect(stories[1].attributes.type).toBe("调研");
+    expect(stories[0].attributes.type).toBe("development");
+    expect(stories[1].attributes.type).toBe("exploration");
+  });
+
+  it("parses single JSON object (not wrapped in array)", () => {
+    const json = JSON.stringify({
+      subject: "auth-module",
+      type: "development",
+      scenario: "software-engineering",
+      content: "Implemented JWT token generation and validation",
+    });
+
+    const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 5]);
+    expect(stories).toHaveLength(1);
+    expect(stories[0].attributes.subject).toBe("auth-module");
+    expect(stories[0].attributes.type).toBe("development");
   });
 
   it("strips markdown code fences from JSON", () => {
     const json = "```json\n" + JSON.stringify([{
-      subject: "XX项目", type: "软件开发", scenario: "通用", content: "完成了核心功能的开发工作",
+      subject: "opinion-analysis", type: "development", scenario: "general", content: "Completed core feature development",
     }]) + "\n```";
 
     const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 5]);
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("XX项目");
+    expect(stories[0].attributes.subject).toBe("opinion-analysis");
+  });
+
+  it("normalizes comma-separated dimension values", () => {
+    const json = JSON.stringify([{
+      subject: "opinion-analysis",
+      type: "development,debugging",
+      scenario: "software-engineering，data-engineering",
+      content: "Fixed the crawler pipeline after initial deployment issues",
+    }]);
+
+    const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 5]);
+    expect(stories).toHaveLength(1);
+    expect(stories[0].attributes.type).toBe("development");
+    expect(stories[0].attributes.scenario).toBe("software-engineering");
   });
 
   it("falls back to ---STORY--- format for legacy output", () => {
     const markdown = [
       "---STORY---",
       "## subject",
-      "XX项目",
+      "opinion-analysis",
       "## type",
-      "软件开发",
+      "development",
       "## scenario",
-      "Web应用",
+      "software-engineering",
       "## content",
-      "实现了用户认证模块，包括JWT token生成和验证",
+      "Implemented the authentication module with proper token handling",
       "---END---",
     ].join("\n");
 
     const stories = parseStoryOrientedOutput(markdown, "summaries/2026-04-21-0.md", [0, 5]);
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("XX项目");
+    expect(stories[0].attributes.subject).toBe("opinion-analysis");
+    expect(stories[0].attributes.type).toBe("development");
   });
 
   it("falls back to single story for unstructured output", () => {
@@ -76,7 +107,9 @@ describe("parseStoryOrientedOutput", () => {
     const stories = parseStoryOrientedOutput(markdown, "summaries/2026-04-21-0.md", [0, 3]);
     expect(stories).toHaveLength(1);
     expect(stories[0].content).toBe("Just some plain text without story markers.");
-    expect(stories[0].attributes.subject).toBe("未知");
+    expect(stories[0].attributes.subject).toBe("unknown");
+    expect(stories[0].attributes.type).toBe("assistance");
+    expect(stories[0].attributes.scenario).toBe("general");
   });
 
   it("uses default values for missing fields in JSON", () => {
@@ -84,9 +117,54 @@ describe("parseStoryOrientedOutput", () => {
 
     const stories = parseStoryOrientedOutput(json, "summaries/2026-04-21-0.md", [0, 3]);
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("未知");
-    expect(stories[0].attributes.type).toBe("对话");
-    expect(stories[0].attributes.scenario).toBe("通用");
+    expect(stories[0].attributes.subject).toBe("unknown");
+    expect(stories[0].attributes.type).toBe("assistance");
+    expect(stories[0].attributes.scenario).toBe("general");
+  });
+});
+
+describe("normalizeDimensionValue", () => {
+  it("returns value as-is when no commas", () => {
+    expect(normalizeDimensionValue("development")).toBe("development");
+  });
+
+  it("takes first value from comma-separated list", () => {
+    expect(normalizeDimensionValue("development,debugging")).toBe("development");
+  });
+
+  it("handles Chinese comma", () => {
+    expect(normalizeDimensionValue("软件开发，故障排查")).toBe("软件开发");
+  });
+
+  it("handles Chinese enumeration comma", () => {
+    expect(normalizeDimensionValue("software-engineering、data-engineering")).toBe("software-engineering");
+  });
+
+  it("trims whitespace", () => {
+    expect(normalizeDimensionValue("  development  ")).toBe("development");
+  });
+});
+
+describe("formatStoriesAsMarkdown", () => {
+  it("formats stories as structured markdown", () => {
+    const stories = parseStoryOrientedOutput(
+      JSON.stringify([
+        { subject: "auth", type: "development", scenario: "software-engineering", content: "Built auth module." },
+        { subject: "auth", type: "debugging", scenario: "system-ops", content: "Fixed token expiry bug." },
+      ]),
+      "summaries/test.md",
+      [0, 10],
+    );
+
+    const md = formatStoriesAsMarkdown(stories);
+    expect(md).toContain("## 1. auth — development · software-engineering");
+    expect(md).toContain("## 2. auth — debugging · system-ops");
+    expect(md).toContain("Built auth module.");
+    expect(md).toContain("---");
+  });
+
+  it("returns empty string for empty array", () => {
+    expect(formatStoriesAsMarkdown([])).toBe("");
   });
 });
 
@@ -104,22 +182,22 @@ describe("extractStoriesStructural", () => {
     expect(stories[0].attributes.subject).toBeTruthy();
   });
 
-  it("extracts type as 软件开发 when write_file present", () => {
+  it("extracts type as development when write_file present", () => {
     const messages = [
       makeTool("write_file", "wrote file", { path: "src/utils.ts" }),
     ];
 
     const stories = extractStoriesStructural(messages, "summaries/2026-04-21-0.md", [0, 1]);
-    expect(stories[0].attributes.type).toBe("软件开发");
+    expect(stories[0].attributes.type).toBe("development");
   });
 
-  it("extracts type as 故障排查 when shell error present", () => {
+  it("extracts type as debugging when shell error present", () => {
     const messages = [
       makeTool("run_shell", "Error: something failed"),
     ];
 
     const stories = extractStoriesStructural(messages, "summaries/2026-04-21-0.md", [0, 1]);
-    expect(stories[0].attributes.type).toBe("故障排查");
+    expect(stories[0].attributes.type).toBe("debugging");
   });
 
   it("handles empty messages", () => {

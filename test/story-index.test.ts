@@ -67,9 +67,9 @@ function makeSummary(overrides: Partial<StorySummary> = {}): StorySummary {
   return {
     content: "Implemented authentication module",
     attributes: {
-      subject: "XX项目",
-      type: "软件开发",
-      scenario: "Web应用",
+      subject: "auth-module",
+      type: "development",
+      scenario: "software-engineering",
     },
     sourceSummary: "summaries/2026-04-21-0.md",
     messageRange: [0, 5],
@@ -97,7 +97,7 @@ describe("StoryIndexManager", () => {
 
     const stories = mgr.getAllStories();
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("XX项目");
+    expect(stories[0].attributes.subject).toBe("auth-module");
     expect(stories[0].narrative).toContain("authentication");
     expect(stories[0].sources).toHaveLength(1);
 
@@ -105,7 +105,7 @@ describe("StoryIndexManager", () => {
     db.close();
   });
 
-  it("merges matching stories (exact match)", async () => {
+  it("merges matching stories (normalized match)", async () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
@@ -137,9 +137,9 @@ describe("StoryIndexManager", () => {
     const summary2 = makeSummary({
       content: "Investigated database issue",
       attributes: {
-        subject: "XX项目",
-        type: "故障排查",
-        scenario: "生产环境",
+        subject: "auth-module",
+        type: "debugging",
+        scenario: "system-ops",
       },
       sourceSummary: "summaries/2026-04-21-1.md",
     });
@@ -152,21 +152,41 @@ describe("StoryIndexManager", () => {
     db.close();
   });
 
+  it("merges stories with comma-separated dimension values", async () => {
+    const db = openDb("session-1");
+    const mgr = new StoryIndexManager(db, storyStorage, "session-1");
+
+    const summary1 = makeSummary({
+      attributes: { subject: "auth-module", type: "development", scenario: "software-engineering" },
+    });
+    const summary2 = makeSummary({
+      attributes: { subject: "auth-module", type: "development,debugging", scenario: "software-engineering，system-ops" },
+      sourceSummary: "summaries/2026-04-21-1.md",
+    });
+
+    await mgr.processSummaries([summary1, summary2]);
+
+    const stories = mgr.getAllStories();
+    expect(stories).toHaveLength(1); // Normalized match merges them
+    mgr.close();
+    db.close();
+  });
+
   it("creates entity documents for each dimension", async () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
     await mgr.processSummaries([makeSummary()]);
 
-    const subjectEntity = mgr.getEntity("subject", "XX项目");
+    const subjectEntity = mgr.getEntity("subject", "auth-module");
     expect(subjectEntity).toBeDefined();
-    expect(subjectEntity!.name).toBe("XX项目");
+    expect(subjectEntity!.name).toBe("auth-module");
     expect(subjectEntity!.storyIds.length).toBeGreaterThan(0);
 
-    const typeEntity = mgr.getEntity("type", "软件开发");
+    const typeEntity = mgr.getEntity("type", "development");
     expect(typeEntity).toBeDefined();
 
-    const scenarioEntity = mgr.getEntity("scenario", "Web应用");
+    const scenarioEntity = mgr.getEntity("scenario", "software-engineering");
     expect(scenarioEntity).toBeDefined();
 
     mgr.close();
@@ -222,9 +242,9 @@ describe("StoryIndexManager", () => {
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
     const summaries = [
-      makeSummary({ attributes: { subject: "项目A", type: "软件开发", scenario: "Web" } }),
-      makeSummary({ attributes: { subject: "项目B", type: "调研", scenario: "技术选型" } }),
-      makeSummary({ attributes: { subject: "项目A", type: "软件开发", scenario: "Web" } }), // Same as first
+      makeSummary({ attributes: { subject: "project-a", type: "development", scenario: "software-engineering" } }),
+      makeSummary({ attributes: { subject: "project-b", type: "exploration", scenario: "data-engineering" } }),
+      makeSummary({ attributes: { subject: "project-a", type: "development", scenario: "software-engineering" } }), // Same as first
     ];
 
     await mgr.processSummaries(summaries);

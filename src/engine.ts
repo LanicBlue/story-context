@@ -3,7 +3,7 @@ import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
 import { ContentProcessor } from "./content-processor.js";
 import { ContentStorage } from "./content-storage.js";
 import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { extractStoriesStructural, extractStoriesWithLLM } from "./story-extractor.js";
+import { extractStoriesStructural, extractStoriesWithLLM, formatStoriesAsMarkdown } from "./story-extractor.js";
 import { StoryIndexManager } from "./story-index.js";
 import { StoryStorage } from "./story-storage.js";
 import { MessageStore } from "./message-store.js";
@@ -619,7 +619,9 @@ export class SmartContextEngine {
             [window.coreStartIdx, window.coreEndIdx],
             dims,
           );
-          markdown = rawOutput || this.compactor.buildStructuralSummary(nonDroppedCore);
+          markdown = (llmStories.length > 0 ? formatStoriesAsMarkdown(llmStories) : "")
+            || rawOutput
+            || this.compactor.buildStructuralSummary(nonDroppedCore);
           storySummaries = llmStories;
         } catch {
           markdown = this.compactor.buildStructuralSummary(nonDroppedCore);

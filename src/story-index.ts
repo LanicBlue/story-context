@@ -29,10 +29,16 @@ export class StoryIndexManager {
     };
   }
 
+  // ── Dimension Normalization ────────────────────────────────────────
+
+  private normalizeDim(val: string): string {
+    return val.split(/[,，、]/)[0].trim().toLowerCase();
+  }
+
   // ── Story ID Generation ──────────────────────────────────────────
 
   private generateStoryId(attrs: { subject: string; type: string; scenario: string }): string {
-    const payload = [attrs.subject, attrs.type, attrs.scenario].join("|");
+    const payload = [this.normalizeDim(attrs.subject), this.normalizeDim(attrs.type), this.normalizeDim(attrs.scenario)].join("|");
     const hash = createHash("sha256").update(payload).digest("hex").slice(0, 8);
     return `story-${hash}`;
   }
@@ -56,13 +62,16 @@ export class StoryIndexManager {
     }
   }
 
-  /** Find an existing story that matches all three dimensions exactly. */
+  /** Find an existing story that matches all three dimensions (normalized). */
   private findMatch(summary: StorySummary): StoryDocument | undefined {
+    const sS = this.normalizeDim(summary.attributes.subject);
+    const sT = this.normalizeDim(summary.attributes.type);
+    const sSc = this.normalizeDim(summary.attributes.scenario);
     for (const doc of this.index.documents.values()) {
       if (
-        doc.attributes.subject === summary.attributes.subject &&
-        doc.attributes.type === summary.attributes.type &&
-        doc.attributes.scenario === summary.attributes.scenario
+        this.normalizeDim(doc.attributes.subject) === sS &&
+        this.normalizeDim(doc.attributes.type) === sT &&
+        this.normalizeDim(doc.attributes.scenario) === sSc
       ) {
         return doc;
       }
