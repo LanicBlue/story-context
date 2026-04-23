@@ -619,7 +619,7 @@ export class SmartContextEngine {
             [window.coreStartIdx, window.coreEndIdx],
             dims,
           );
-          markdown = rawOutput;
+          markdown = rawOutput || this.compactor.buildStructuralSummary(nonDroppedCore);
           storySummaries = llmStories;
         } catch {
           markdown = this.compactor.buildStructuralSummary(nonDroppedCore);

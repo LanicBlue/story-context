@@ -96,7 +96,7 @@ describe("HttpSummarizer", () => {
 
     const body = JSON.parse(opts.body);
     expect(body.model).toBe("qwen2.5");
-    expect(body.max_tokens).toBe(600);
+    expect(body.max_tokens).toBe(1200);
     expect(body.messages[0].role).toBe("system");
     expect(body.messages[1].role).toBe("user");
   });

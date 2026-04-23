@@ -23,7 +23,7 @@ describe("parseStoryOrientedOutput", () => {
       "## scenario",
       "Web应用",
       "## content",
-      "实现了认证模块",
+      "实现了用户认证模块，包括JWT token生成和验证",
       "---END---",
     ].join("\n");
 
@@ -46,7 +46,7 @@ describe("parseStoryOrientedOutput", () => {
       "## scenario",
       "Web应用",
       "## content",
-      "实现认证",
+      "实现了用户认证模块的功能开发",
       "---END---",
       "---STORY---",
       "## subject",

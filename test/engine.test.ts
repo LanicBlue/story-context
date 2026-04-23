@@ -321,8 +321,8 @@ describe("SmartContextEngine content processing integration", () => {
 
     const state = engine._getState(SID)!;
     const msg = state.messages[0] as { content: string };
-    expect(msg.content).toContain("[Stored:");
-    expect(msg.content).toContain("--- Head ---");
+    expect(msg.content).toContain("<persisted-output>");
+    expect(msg.content).toContain("Preview");
   });
 
   it("drops messages matching message-level filter", async () => {
@@ -337,8 +337,11 @@ describe("SmartContextEngine content processing integration", () => {
       message: makeMessage("assistant", "verbose debug output"),
     });
 
+    // Filter is applied in afterTurn, not ingest
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+
     const state = engine._getState(SID)!;
-    expect(state.messages.length).toBe(0);
+    expect((state.messages[0] as Record<string, unknown>)._dropped).toBe(true);
   });
 
   it("short content passes through unchanged", async () => {

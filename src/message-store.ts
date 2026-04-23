@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync, existsSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import type { CompressedWindow, SessionState } from "./types.js";
 
 // ── Schema ────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ export class MessageStore {
   private readonly dbs = new Map<string, Database.Database>();
 
   constructor(baseDir: string) {
-    this.baseDir = baseDir;
+    this.baseDir = baseDir || join(tmpdir(), "smart-context");
   }
 
   /** Get or create the shared DB connection for a session. */

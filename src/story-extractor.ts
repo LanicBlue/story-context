@@ -86,9 +86,21 @@ export function parseStoryOrientedOutput(
 }
 
 function extractSection(text: string, heading: string): string | undefined {
-  const regex = new RegExp(`^##\\s+${heading}\\s*\\n([\\s\\S]*?)(?=^##\\s|$(?!\\n))`, "m");
-  const match = regex.exec(text);
-  return match?.[1]?.trim();
+  const lines = text.split("\n");
+  let capturing = false;
+  const captured: string[] = [];
+  const target = "## " + heading;
+
+  for (const line of lines) {
+    if (capturing) {
+      if (line.startsWith("## ")) break;
+      captured.push(line);
+    } else if (line === target) {
+      capturing = true;
+    }
+  }
+
+  return captured.length > 0 ? captured.join("\n").trim() : undefined;
 }
 
 /** Extract stories using LLM, falling back to structural extraction on failure. */
