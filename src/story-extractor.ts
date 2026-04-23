@@ -6,18 +6,16 @@ import { extractText, extractRole, extractToolName, extractToolArg } from "./com
 
 export const STORY_EXTRACT_SYSTEM_PROMPT =
   "You are a conversation compression engine. /no_think\n" +
-  "Task: Read the conversation and extract stories.\n" +
-  "For each story, provide:\n" +
-  "1. subject: the main entity (project name, module, concept, person)\n" +
-  "2. type: activity type (development, investigation, troubleshooting, decision, discussion, deployment, analysis)\n" +
-  "3. scenario: context (production, development, testing, client engagement, configuration)\n" +
-  "4. content: a concise 2-3 sentence narrative describing what happened\n\n" +
-  "IMPORTANT:\n" +
-  "- Write narrative summaries, do NOT copy raw text or JSON from the conversation\n" +
-  "- Each content section must be your own summary of what occurred\n" +
+  "Extract stories as JSON array. Each story:\n" +
+  '{ "subject": "<project/module name>", "type": "<category>", "scenario": "<context>", "content": "<narrative>" }\n\n' +
+  "Rules:\n" +
+  "- subject: the main entity (project name, module, concept, person), short and stable\n" +
+  "- type: pick from {软件开发|调研|部署|故障排查|讨论|分析|决策|配置|日常}, create new only if none fits\n" +
+  "- scenario: context (production, development, testing, configuration, etc.)\n" +
+  "- content: concise 2-3 sentence narrative, do NOT copy raw text or JSON\n" +
   "- Omit tool output details, file contents, and API responses\n\n" +
-  "Output format:\n" +
-  "---STORY---\n## subject\n<value>\n## type\n<value>\n## scenario\n<value>\n## content\n<your narrative summary>\n---END---";
+  "Output ONLY a JSON array, no markdown fences.\n" +
+  'Example: [{"subject":"XX项目","type":"软件开发","scenario":"Web应用","content":"实现了认证模块。"}]';
 
 export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract stories.
 
@@ -30,7 +28,7 @@ export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and e
 [Context after]
 {postOverlap}
 
-Extract stories using the ---STORY--- format. Write narrative summaries, not raw text.`;
+Extract stories as JSON. Write narrative summaries, not raw text.`;
 
 export const SEMANTIC_MATCH_PROMPT =
   "Determine whether the attributes of the following two stories semantically match. " +
@@ -39,12 +37,17 @@ export const SEMANTIC_MATCH_PROMPT =
 
 // ── Parse LLM Output ──────────────────────────────────────────────
 
-/** Parse story-oriented LLM output into StorySummary array. */
+/** Parse LLM output into StorySummary array. Tries JSON first, falls back to ---STORY--- format. */
 export function parseStoryOrientedOutput(
   markdown: string,
   sourceSummary: string,
   messageRange: [number, number],
 ): StorySummary[] {
+  // Try JSON array first
+  const jsonStories = parseStoryJsonOutput(markdown, sourceSummary, messageRange);
+  if (jsonStories.length > 0) return jsonStories;
+
+  // Legacy: ---STORY--- blocks
   const stories: StorySummary[] = [];
   const blocks = markdown.split(/---STORY---/).filter((b) => b.trim());
 
@@ -55,8 +58,7 @@ export function parseStoryOrientedOutput(
     const scenario = extractSection(cleaned, "scenario");
     const content = extractSection(cleaned, "content");
 
-    // Skip stories with no meaningful content
-    if (!content || content.trim().length < 10) continue;
+    if (!content || content.trim().length < 5) continue;
 
     stories.push({
       content: content.trim(),
@@ -71,7 +73,7 @@ export function parseStoryOrientedOutput(
     });
   }
 
-  // Fallback: if no structured stories found, treat entire output as one story
+  // Fallback: treat entire output as one story
   if (stories.length === 0 && markdown.trim()) {
     stories.push({
       content: markdown.trim(),
@@ -83,6 +85,45 @@ export function parseStoryOrientedOutput(
   }
 
   return stories;
+}
+
+/** Parse JSON array output from LLM. */
+function parseStoryJsonOutput(
+  raw: string,
+  sourceSummary: string,
+  messageRange: [number, number],
+): StorySummary[] {
+  let text = raw.trim();
+  text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+  const arrMatch = text.match(/\[[\s\S]*\]/);
+  if (!arrMatch) return [];
+
+  try {
+    const arr = JSON.parse(arrMatch[0]) as Array<Record<string, unknown>>;
+    if (!Array.isArray(arr)) return [];
+
+    const stories: StorySummary[] = [];
+    for (const item of arr) {
+      const content = typeof item.content === "string" ? item.content.trim() : "";
+      if (content.length < 5) continue;
+
+      stories.push({
+        content,
+        attributes: {
+          subject: typeof item.subject === "string" ? item.subject.trim() : "未知",
+          type: typeof item.type === "string" ? item.type.trim() : "对话",
+          scenario: typeof item.scenario === "string" ? item.scenario.trim() : "通用",
+        },
+        sourceSummary,
+        messageRange,
+        timestamp: Date.now(),
+      });
+    }
+    return stories;
+  } catch {
+    return [];
+  }
 }
 
 function extractSection(text: string, heading: string): string | undefined {
@@ -127,11 +168,11 @@ export async function extractStoriesWithLLM(
     let knownHint = "";
     if (knownDimensions) {
       const parts: string[] = [];
-      if (knownDimensions.subjects.length > 0) parts.push(`Known subjects: ${knownDimensions.subjects.join(", ")}`);
-      if (knownDimensions.types.length > 0) parts.push(`Known types: ${knownDimensions.types.join(", ")}`);
-      if (knownDimensions.scenarios.length > 0) parts.push(`Known scenarios: ${knownDimensions.scenarios.join(", ")}`);
+      if (knownDimensions.subjects.length > 0) parts.push(`subject: {${knownDimensions.subjects.join(", ")}}`);
+      if (knownDimensions.types.length > 0) parts.push(`type: {${knownDimensions.types.join(", ")}}`);
+      if (knownDimensions.scenarios.length > 0) parts.push(`scenario: {${knownDimensions.scenarios.join(", ")}}`);
       if (parts.length > 0) {
-        knownHint = `\n\nPrefer reusing known dimension values when they fit. ${parts.join(". ")}`;
+        knownHint = `\n\n[Known Schema — MUST reuse existing values]\n${parts.join("\n")}\nRule: semantically similar MUST merge into existing values.`;
       }
     }
 
