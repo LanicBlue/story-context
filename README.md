@@ -4,25 +4,29 @@ An agent-centric context engine plugin for [OpenClaw](https://github.com/nicepkg
 
 ## Install
 
+Clone and build as an OpenClaw plugin:
+
 ```bash
-npm install story-context
+git clone https://github.com/LanicBlue/story-context.git
+cd story-context
+npm install
+npm run build
 ```
+
+Then configure in your OpenClaw settings to use this context engine.
 
 ## Quick Start
 
-```typescript
-import { SmartContextEngine, HttpSummarizer } from "story-context";
+The engine uses OpenClaw's built-in LLM by default (`summaryMode: "runtime"`). No external model setup needed.
 
-const summarizer = new HttpSummarizer({
-  baseUrl: "http://localhost:11434/v1",
-  model: "qwen2.5:3b",
-});
+```typescript
+import { SmartContextEngine } from "story-context";
 
 const engine = new SmartContextEngine({
   maxHistoryTokens: 16000,
   summaryEnabled: true,
   storageDir: "./data",
-}, summarizer);
+});
 
 // Feed messages
 await engine.ingest({ sessionId: "main", message: msg });
@@ -34,6 +38,8 @@ await engine.compact({ sessionId: "main", sessionFile: "" });
 // Build context for LLM
 const result = await engine.assemble({ sessionId: "main", messages: [] });
 ```
+
+To use a custom OpenAI-compatible API (e.g., local Ollama), set `summaryMode: "http"` and configure `summaryBaseUrl`.
 
 ## How It Works
 
