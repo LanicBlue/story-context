@@ -26,7 +26,7 @@ const SID = "test-session";
 describe("SmartContextEngine basics", () => {
   it("reports correct engine info", () => {
     const engine = new SmartContextEngine();
-    expect(engine.info.id).toBe("smart-context");
+    expect(engine.info.id).toBe("story-context");
     expect(engine.info.version).toBe("2.0.0");
     expect(engine.info.ownsCompaction).toBe(true);
   });

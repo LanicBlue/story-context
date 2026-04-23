@@ -49,7 +49,7 @@ export type ContextEngineInfo = {
 
 export class SmartContextEngine {
   readonly info: ContextEngineInfo = {
-    id: "smart-context",
+    id: "story-context",
     name: "Smart Context Engine",
     version: "2.0.0",
     ownsCompaction: true,

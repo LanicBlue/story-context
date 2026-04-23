@@ -1,5 +1,5 @@
 {
-  "name": "smart-context",
+  "name": "story-context",
   "version": "0.1.0",
   "description": "Smart Context Engine plugin for OpenClaw — dedup-aware sliding window with working memory",
   "type": "module",

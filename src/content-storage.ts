@@ -7,7 +7,7 @@ export class ContentStorage {
   private readonly baseDir: string;
 
   constructor(baseDir?: string) {
-    this.baseDir = baseDir || join(tmpdir(), "smart-context");
+    this.baseDir = baseDir || join(tmpdir(), "story-context");
   }
 
   private sessionDir(sessionId: string): string {

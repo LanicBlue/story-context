@@ -105,7 +105,7 @@ export class MessageStore {
   private readonly dbs = new Map<string, Database.Database>();
 
   constructor(baseDir: string) {
-    this.baseDir = baseDir || join(tmpdir(), "smart-context");
+    this.baseDir = baseDir || join(tmpdir(), "story-context");
   }
 
   /** Get or create the shared DB connection for a session. */

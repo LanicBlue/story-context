@@ -39,7 +39,7 @@ function createSummarizer(api: PluginApi, rawConfig: Record<string, unknown>): S
 }
 
 const smartContextPlugin = {
-  id: "smart-context",
+  id: "story-context",
   name: "Smart Context Engine",
   description:
     "Dedup-aware sliding window context engine with LLM summarization for OpenClaw",
@@ -64,7 +64,7 @@ const smartContextPlugin = {
 
     const summarizer = createSummarizer(api, pluginConfig);
 
-    api.registerContextEngine("smart-context", () => {
+    api.registerContextEngine("story-context", () => {
       return new SmartContextEngine(pluginConfig, summarizer);
     });
   },

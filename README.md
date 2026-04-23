@@ -79,7 +79,7 @@ OpenClaw ContextEngine 插件，提供事件导向的上下文压缩、索引和
 ### 运行单元测试
 
 ```bash
-cd smart-context
+cd story-context
 npm test
 ```
 

@@ -1,5 +1,5 @@
 {
-  "id": "smart-context",
+  "id": "story-context",
   "kind": "context-engine",
   "configSchema": {
     "type": "object",
