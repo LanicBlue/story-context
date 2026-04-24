@@ -160,6 +160,7 @@ describe("Compactor.compressWithLLM", () => {
         promptCalls.push(text);
         return "# Compressed Summary\n## Task Intent\n- Test task";
       },
+      rawGenerate: async () => "",
     };
 
     const c = new Compactor(storage, mockSummarizer);

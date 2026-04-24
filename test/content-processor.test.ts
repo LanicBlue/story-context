@@ -111,6 +111,7 @@ describe("ContentProcessor", () => {
     it("includes AI summary when enabled and summarizer available", async () => {
       const mockSummarizer: Summarizer = {
         summarize: async () => "Key findings: 3 errors found",
+        rawGenerate: async () => "",
       };
       const cp = makeProcessor(
         { largeTextThreshold: 100, summaryEnabled: true },
@@ -125,6 +126,7 @@ describe("ContentProcessor", () => {
     it("skips AI summary when not enabled even if summarizer exists", async () => {
       const mockSummarizer: Summarizer = {
         summarize: async () => "summary",
+        rawGenerate: async () => "",
       };
       const cp = makeProcessor(
         { largeTextThreshold: 100, summaryEnabled: false },

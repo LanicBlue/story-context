@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS stories (
   scenario TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   narrative TEXT DEFAULT '',
+  active_until_turn INTEGER NOT NULL DEFAULT 0,
+  last_edited_turn INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   last_updated INTEGER NOT NULL
 );
@@ -80,6 +82,11 @@ CREATE TABLE IF NOT EXISTS processed_summaries (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
+`;
+
+const MIGRATIONS = `
+ALTER TABLE stories ADD COLUMN active_until_turn INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stories ADD COLUMN last_edited_turn INTEGER NOT NULL DEFAULT 0;
 `;
 
 type MessageRow = {
@@ -123,6 +130,13 @@ export class MessageStore {
       db = new Database(newPath);
       db.pragma("journal_mode = WAL");
       db.exec(SCHEMA);
+      // Apply migrations (ignore errors if column already exists)
+      for (const line of MIGRATIONS.trim().split(";")) {
+        const sql = line.trim();
+        if (sql) {
+          try { db.exec(sql); } catch { /* column already exists */ }
+        }
+      }
       this.dbs.set(sessionId, db);
     }
     return db;
@@ -253,6 +267,9 @@ export class MessageStore {
         focusedStoryId: get("focusedStoryId") || get("focusedEventId") || null,
         seenReads: new Map(seenReadsArr),
         activeStories: JSON.parse(get("activeStories") || get("activeEvents") || "[]"),
+        currentTurn: parseInt(get("currentTurn") || "0", 10),
+        turnsSinceInnerTurn: parseInt(get("turnsSinceInnerTurn") || "0", 10),
+        innerTurnRunning: false,
       };
     } finally {
       db.close();

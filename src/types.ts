@@ -29,11 +29,19 @@ export type SessionState = {
   activeStories: string[];
   /** Index of first message not yet processed by afterTurn. */
   lastProcessedIdx: number;
+  /** Current turn counter (incremented each afterTurn). */
+  currentTurn: number;
+  /** Turns since last inner turn execution. */
+  turnsSinceInnerTurn: number;
+  /** Whether an inner turn is currently running. */
+  innerTurnRunning: boolean;
 };
 
 /** LLM summarizer interface used by compact(). */
 export type Summarizer = {
   summarize(text: string, targetTokens: number): Promise<string>;
+  /** Send a raw prompt (no wrapping) with a custom system prompt. */
+  rawGenerate(systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string>;
 };
 
 /** Plugin configuration resolved from openclaw.plugin.json. */
@@ -65,6 +73,12 @@ export type SmartContextConfig = {
   // Story context
   recentStoryCount: number;
   recentSummaryCount: number;
+  // Inner turn
+  innerTurnInterval: number;
+  maxActiveStories: number;
+  activeStoryTTL: number;
+  recentMessageCount: number;
+  innerTurnMessageSample: number;
   // Session filtering
   sessionFilter: "all" | "main" | string[];
 };

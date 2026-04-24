@@ -41,6 +41,10 @@ export type StoryDocument = {
   status: "active" | "paused" | "completed" | "abandoned";
   /** Evolving narrative, appended as new summaries match this story. */
   narrative: string;
+  /** Active until this turn number (0 = inactive). Reset on create/update. */
+  activeUntilTurn: number;
+  /** Last turn number when this story was edited. */
+  lastEditedTurn: number;
   createdAt: number;
   lastUpdated: number;
 };

@@ -101,6 +101,19 @@ export class RuntimeSummarizer implements Summarizer {
     }
     return extractContentText(result.content);
   }
+
+  async rawGenerate(systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string> {
+    const result = await this.complete({
+      model: this.model,
+      messages: [{ role: "user", content: userPrompt }],
+      system: systemPrompt,
+      maxTokens,
+    });
+    if (result.error?.message) {
+      throw new Error(`Runtime complete error: ${result.error.message}`);
+    }
+    return extractContentText(result.content);
+  }
 }
 
 // ── HttpSummarizer ────────────────────────────────────────────────
@@ -146,6 +159,7 @@ export class HttpSummarizer implements Summarizer {
         ],
         max_tokens: targetTokens * 2,
         stream: false,
+        ...(this.model.includes("qwen3") ? { enable_thinking: false } : {}),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
@@ -161,6 +175,47 @@ export class HttpSummarizer implements Summarizer {
     const msg = json.choices?.[0]?.message;
     let content = msg?.content?.trim();
     // Ollama Qwen3: thinking tokens go to reasoning field, content may be empty
+    if (!content && msg?.reasoning) {
+      content = msg.reasoning.trim();
+    }
+    if (!content) {
+      throw new Error("Empty response from summarizer");
+    }
+    return content;
+  }
+
+  async rawGenerate(systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        stream: false,
+        ...(this.model.includes("qwen3") ? { enable_thinking: false } : {}),
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}: ${body}`);
+    }
+
+    const json = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string; reasoning?: string } }>;
+    };
+    const msg = json.choices?.[0]?.message;
+    let content = msg?.content?.trim();
     if (!content && msg?.reasoning) {
       content = msg.reasoning.trim();
     }

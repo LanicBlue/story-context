@@ -1,133 +1,8 @@
 import { describe, it, expect } from "vitest";
-import Database from "better-sqlite3";
 import { join } from "node:path";
 import { mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { SmartContextEngine } from "../src/engine.js";
-
-const LCM_DB_PATH = join(import.meta.dirname, "..", "data", "lcm.db");
-const TEST_OUTPUT_DIR = join(import.meta.dirname, "..", "data", "test-output");
-
-/** Map lcm.db messages to our engine's message format. */
-function loadConversation(convId: number, opts?: { limit?: number; offset?: number }): {
-  messages: Array<Record<string, unknown>>;
-  totalTokens: number;
-  totalCount: number;
-} {
-  const db = new Database(LCM_DB_PATH, { readonly: true });
-
-  const limit = opts?.limit;
-  const offset = opts?.offset ?? 0;
-
-  let sql = `SELECT message_id, seq, role, content, token_count
-       FROM messages
-       WHERE conversation_id = ?
-       ORDER BY seq`;
-  const params: Array<number> = [convId];
-  if (limit) {
-    sql += ` LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-  }
-
-  const messages = db.prepare(sql).all(...params) as Array<{
-    message_id: number;
-    seq: number;
-    role: string;
-    content: string;
-    token_count: number;
-  }>;
-
-  const totalCount = (
-    db
-      .prepare("SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?")
-      .get(convId) as { c: number }
-  ).c;
-  const totalTokens = (
-    db
-      .prepare("SELECT SUM(token_count) as t FROM messages WHERE conversation_id = ?")
-      .get(convId) as { t: number | null }
-  ).t ?? 0;
-
-  // Get tool parts
-  const msgIds = messages.map((m) => m.message_id);
-  const toolParts = new Map<
-    number,
-    Array<{ tool_name: string; tool_input: string; tool_output: string }>
-  >();
-
-  if (msgIds.length > 0) {
-    const placeholders = msgIds.map(() => "?").join(",");
-    const partRows = db
-      .prepare(
-        `SELECT message_id, tool_name, tool_input, tool_output
-         FROM message_parts
-         WHERE part_type = 'tool' AND message_id IN (${placeholders})`,
-      )
-      .all(...msgIds) as Array<{
-      message_id: number;
-      tool_name: string;
-      tool_input: string;
-      tool_output: string;
-    }>;
-
-    for (const p of partRows) {
-      if (!toolParts.has(p.message_id)) toolParts.set(p.message_id, []);
-      toolParts.get(p.message_id)!.push(p);
-    }
-  }
-
-  db.close();
-
-  const result: Array<Record<string, unknown>> = [];
-  for (const msg of messages) {
-    if (msg.role === "tool") {
-      const parts = toolParts.get(msg.message_id) ?? [];
-      if (parts.length > 0) {
-        for (const part of parts) {
-          let args: Record<string, unknown> = {};
-          try { args = JSON.parse(part.tool_input || "{}"); } catch { /* ignore */ }
-          result.push({
-            role: "toolResult",
-            content: msg.content || part.tool_output || "",
-            toolName: part.tool_name,
-            args,
-            timestamp: Date.now(),
-          });
-        }
-      } else {
-        result.push({
-          role: "toolResult",
-          content: msg.content || "",
-          toolName: "unknown",
-          args: {},
-          timestamp: Date.now(),
-        });
-      }
-    } else {
-      result.push({
-        role: msg.role as "user" | "assistant",
-        content: msg.content || "",
-        timestamp: Date.now(),
-      });
-    }
-  }
-
-  return { messages: result, totalTokens, totalCount };
-}
-
-/** Print directory tree for inspection. */
-function printTree(dir: string, prefix = "", depth = 0): void {
-  if (depth > 3) return;
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries.slice(0, 30)) {
-    console.log(`${prefix}${entry.name}${entry.isDirectory() ? "/" : ""}`);
-    if (entry.isDirectory()) {
-      printTree(join(dir, entry.name), prefix + "  ", depth + 1);
-    }
-  }
-  if (entries.length > 30) {
-    console.log(`${prefix}... (${entries.length - 30} more)`);
-  }
-}
+import { loadConversation, printTree, TEST_OUTPUT_DIR } from "./test-data.js";
 
 describe("SmartContextEngine with lcm.db data", () => {
   // Clean and create output dir before tests
@@ -139,7 +14,7 @@ describe("SmartContextEngine with lcm.db data", () => {
   it(
     "conv 1: full pipeline with output to data/test-output/",
     async () => {
-      const { messages, totalTokens, totalCount } = loadConversation(1);
+      const { messages, totalTokens, totalCount } = await loadConversation(1);
       console.log(`Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens)`);
 
       const engine = new SmartContextEngine({

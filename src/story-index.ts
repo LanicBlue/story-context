@@ -98,6 +98,8 @@ export class StoryIndexManager {
       }],
       status: "active",
       narrative: summary.content,
+      activeUntilTurn: 0,
+      lastEditedTurn: 0,
       createdAt: now,
       lastUpdated: now,
     };
@@ -144,6 +146,14 @@ export class StoryIndexManager {
     attrs: { subject: string; type: string; scenario: string },
     storyId: string,
   ): Promise<void> {
+    this.ensureEntitiesSync(attrs, storyId);
+  }
+
+  /** Sync entity creation (no file write, just DB + memory). */
+  private ensureEntitiesSync(
+    attrs: { subject: string; type: string; scenario: string },
+    storyId: string,
+  ): void {
     const dimensions: Array<[Dimension, string]> = [
       ["subject", attrs.subject],
       ["type", attrs.type],
@@ -172,11 +182,7 @@ export class StoryIndexManager {
         this.persistEntity(entity);
       }
 
-      // Link story to entity
       this.persistStoryEntity(storyId, dim, name);
-
-      // Persist .md
-      await this.storage.writeEntityDocument(this.sessionId, entity);
     }
   }
 
@@ -184,11 +190,13 @@ export class StoryIndexManager {
 
   private persistStory(doc: StoryDocument): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO stories (id, title, subject, type, scenario, status, narrative, created_at, last_updated)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO stories (id, title, subject, type, scenario, status, narrative, active_until_turn, last_edited_turn, created_at, last_updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       doc.id, doc.title, doc.attributes.subject, doc.attributes.type,
-      doc.attributes.scenario, doc.status, doc.narrative, doc.createdAt, doc.lastUpdated,
+      doc.attributes.scenario, doc.status, doc.narrative,
+      doc.activeUntilTurn, doc.lastEditedTurn,
+      doc.createdAt, doc.lastUpdated,
     );
 
     // Update FTS
@@ -235,11 +243,106 @@ export class StoryIndexManager {
     return [...this.index.documents.values()];
   }
 
-  /** Get active stories sorted by last update. */
+  /** Get active stories sorted by last update (most recent first). */
   getActiveStories(): StoryDocument[] {
     return this.getAllStories()
       .filter((e) => e.status === "active")
-      .sort((a, b) => b.lastUpdated - a.lastUpdated);
+      .sort((a, b) => b.lastEditedTurn - a.lastEditedTurn);
+  }
+
+  /** Get stories that are active (activeUntilTurn >= currentTurn). */
+  getActiveStoriesByTurn(currentTurn: number): StoryDocument[] {
+    return this.getAllStories()
+      .filter((e) => e.activeUntilTurn >= currentTurn && e.status === "active")
+      .sort((a, b) => b.lastEditedTurn - a.lastEditedTurn);
+  }
+
+  /** Expire stories whose activeUntilTurn < currentTurn. */
+  expireOldStories(currentTurn: number): void {
+    for (const doc of this.index.documents.values()) {
+      if (doc.activeUntilTurn > 0 && doc.activeUntilTurn < currentTurn) {
+        doc.activeUntilTurn = 0;
+        this.persistStory(doc);
+      }
+    }
+  }
+
+  /** Evict oldest active stories when count exceeds maxActiveStories. */
+  evictOverflow(maxActiveStories: number, currentTurn: number): void {
+    const active = this.getActiveStoriesByTurn(currentTurn);
+    if (active.length <= maxActiveStories) return;
+    // Evict oldest by lastEditedTurn (FIFO)
+    const toEvict = active.slice(maxActiveStories);
+    for (const doc of toEvict) {
+      doc.activeUntilTurn = 0;
+      this.persistStory(doc);
+    }
+  }
+
+  // ── Direct Story Manipulation (for inner turn) ──────────────────
+
+  /** Create a story directly from inner turn. Returns the story ID. */
+  createStoryDirect(
+    attrs: { subject: string; type: string; scenario: string; content: string },
+    currentTurn: number,
+    activeStoryTTL: number,
+  ): string {
+    const id = this.generateStoryId(attrs);
+    const now = Date.now();
+    const title = `${attrs.subject} — ${attrs.type}`;
+
+    const doc: StoryDocument = {
+      id,
+      title,
+      attributes: { subject: attrs.subject, type: attrs.type, scenario: attrs.scenario },
+      sources: [],
+      status: "active",
+      narrative: attrs.content,
+      activeUntilTurn: currentTurn + activeStoryTTL,
+      lastEditedTurn: currentTurn,
+      createdAt: now,
+      lastUpdated: now,
+    };
+
+    this.index.documents.set(id, doc);
+    this.persistStory(doc);
+
+    // Ensure entities (fire-and-forget, no await needed for sync persist)
+    this.ensureEntitiesSync(attrs, id);
+
+    return id;
+  }
+
+  /** Update story content directly from inner turn. */
+  updateStoryContentDirect(
+    storyId: string,
+    content: string,
+    append: boolean,
+    currentTurn: number,
+    activeStoryTTL: number,
+  ): void {
+    const doc = this.index.documents.get(storyId);
+    if (!doc) throw new Error(`Story ${storyId} not found`);
+
+    if (append) {
+      doc.narrative += `\n\n${content}`;
+    } else {
+      doc.narrative = content;
+    }
+    doc.activeUntilTurn = currentTurn + activeStoryTTL;
+    doc.lastEditedTurn = currentTurn;
+    doc.lastUpdated = Date.now();
+
+    this.persistStory(doc);
+  }
+
+  /** Remove a story (used for rollback). */
+  removeStory(storyId: string): void {
+    this.index.documents.delete(storyId);
+    this.db.prepare("DELETE FROM stories WHERE id = ?").run(storyId);
+    this.db.prepare("DELETE FROM stories_fts WHERE id = ?").run(storyId);
+    this.db.prepare("DELETE FROM story_sources WHERE story_id = ?").run(storyId);
+    this.db.prepare("DELETE FROM story_entities WHERE story_id = ?").run(storyId);
   }
 
   /** Get distinct known values for each dimension. */
@@ -295,7 +398,8 @@ export class StoryIndexManager {
     // Stories
     const storyRows = this.db.prepare("SELECT * FROM stories").all() as Array<{
       id: string; title: string; subject: string; type: string; scenario: string;
-      status: string; narrative: string; created_at: number; last_updated: number;
+      status: string; narrative: string; active_until_turn: number; last_edited_turn: number;
+      created_at: number; last_updated: number;
     }>;
     for (const r of storyRows) {
       const sourceRows = this.db.prepare(
@@ -315,6 +419,8 @@ export class StoryIndexManager {
         })),
         status: r.status as StoryDocument["status"],
         narrative: r.narrative,
+        activeUntilTurn: r.active_until_turn ?? 0,
+        lastEditedTurn: r.last_edited_turn ?? 0,
         createdAt: r.created_at,
         lastUpdated: r.last_updated,
       });

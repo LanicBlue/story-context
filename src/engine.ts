@@ -104,6 +104,9 @@ export class SmartContextEngine {
         },
         activeStories: [],
         lastProcessedIdx: 0,
+        currentTurn: 0,
+        turnsSinceInnerTurn: 0,
+        innerTurnRunning: false,
       };
       this.sessions.set(sessionId, s);
     }

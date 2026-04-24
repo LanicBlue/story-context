@@ -8,46 +8,7 @@ import { StoryIndexManager } from "../src/story-index.js";
 import { StoryStorage } from "../src/story-storage.js";
 import { ContentStorage } from "../src/content-storage.js";
 import type { StorySummary } from "../src/story-types.js";
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS stories (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  type TEXT NOT NULL,
-  scenario TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  narrative TEXT DEFAULT '',
-  created_at INTEGER NOT NULL,
-  last_updated INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS story_sources (
-  story_id TEXT NOT NULL,
-  summary_path TEXT NOT NULL,
-  msg_start INTEGER NOT NULL,
-  msg_end INTEGER NOT NULL,
-  timestamp INTEGER NOT NULL,
-  snippet TEXT DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS entities (
-  dimension TEXT NOT NULL,
-  name TEXT NOT NULL,
-  description TEXT DEFAULT '',
-  created_at INTEGER NOT NULL,
-  last_updated INTEGER NOT NULL,
-  PRIMARY KEY (dimension, name)
-);
-CREATE TABLE IF NOT EXISTS story_entities (
-  story_id TEXT NOT NULL,
-  dimension TEXT NOT NULL,
-  entity_name TEXT NOT NULL,
-  PRIMARY KEY (story_id, dimension)
-);
-CREATE TABLE IF NOT EXISTS processed_summaries (
-  path TEXT PRIMARY KEY
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
-`;
+import { TYPES, SCENARIOS, SUBJECTS, TEST_DB_SCHEMA, makeStorySummary } from "./test-data.js";
 
 let testDir: string;
 let storage: ContentStorage;
@@ -63,27 +24,12 @@ afterEach(async () => {
   await rm(testDir, { recursive: true, force: true });
 });
 
-function makeSummary(overrides: Partial<StorySummary> = {}): StorySummary {
-  return {
-    content: "Implemented authentication module",
-    attributes: {
-      subject: "auth-module",
-      type: "development",
-      scenario: "software-engineering",
-    },
-    sourceSummary: "summaries/2026-04-21-0.md",
-    messageRange: [0, 5],
-    timestamp: Date.now(),
-    ...overrides,
-  };
-}
-
 function openDb(sessionId: string): Database.Database {
   const dir = join(testDir, sessionId);
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "session.db"));
   db.pragma("journal_mode = WAL");
-  db.exec(SCHEMA);
+  db.exec(TEST_DB_SCHEMA);
   return db;
 }
 
@@ -92,13 +38,13 @@ describe("StoryIndexManager", () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    const summary = makeSummary();
+    const summary = makeStorySummary();
     await mgr.processSummaries([summary]);
 
     const stories = mgr.getAllStories();
     expect(stories).toHaveLength(1);
-    expect(stories[0].attributes.subject).toBe("auth-module");
-    expect(stories[0].narrative).toContain("authentication");
+    expect(stories[0].attributes.subject).toBe(SUBJECTS.authModule);
+    expect(stories[0].narrative).toContain("auth");
     expect(stories[0].sources).toHaveLength(1);
 
     mgr.close();
@@ -109,8 +55,8 @@ describe("StoryIndexManager", () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    const summary1 = makeSummary();
-    const summary2 = makeSummary({
+    const summary1 = makeStorySummary();
+    const summary2 = makeStorySummary({
       content: "Completed JWT implementation",
       sourceSummary: "summaries/2026-04-21-1.md",
       messageRange: [5, 10],
@@ -122,7 +68,7 @@ describe("StoryIndexManager", () => {
     const stories = mgr.getAllStories();
     expect(stories).toHaveLength(1); // Merged into one
     expect(stories[0].sources).toHaveLength(2);
-    expect(stories[0].narrative).toContain("authentication");
+    expect(stories[0].narrative).toContain("auth");
     expect(stories[0].narrative).toContain("JWT");
 
     mgr.close();
@@ -133,13 +79,13 @@ describe("StoryIndexManager", () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    const summary1 = makeSummary();
-    const summary2 = makeSummary({
+    const summary1 = makeStorySummary();
+    const summary2 = makeStorySummary({
       content: "Investigated database issue",
       attributes: {
-        subject: "auth-module",
-        type: "debugging",
-        scenario: "system-ops",
+        subject: SUBJECTS.authModule,
+        type: TYPES.debugging,
+        scenario: SCENARIOS.systemOps,
       },
       sourceSummary: "summaries/2026-04-21-1.md",
     });
@@ -152,15 +98,15 @@ describe("StoryIndexManager", () => {
     db.close();
   });
 
-  it("merges stories with comma-separated dimension values", async () => {
+  it("merges stories with comma-separated dimension", async () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    const summary1 = makeSummary({
-      attributes: { subject: "auth-module", type: "development", scenario: "software-engineering" },
+    const summary1 = makeStorySummary({
+      attributes: { subject: SUBJECTS.authModule, type: TYPES.implementation, scenario: SCENARIOS.softwareCoding },
     });
-    const summary2 = makeSummary({
-      attributes: { subject: "auth-module", type: "development,debugging", scenario: "software-engineering，system-ops" },
+    const summary2 = makeStorySummary({
+      attributes: { subject: SUBJECTS.authModule, type: `${TYPES.implementation},${TYPES.debugging}`, scenario: `${SCENARIOS.softwareCoding}，${SCENARIOS.systemOps}` },
       sourceSummary: "summaries/2026-04-21-1.md",
     });
 
@@ -176,17 +122,17 @@ describe("StoryIndexManager", () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    await mgr.processSummaries([makeSummary()]);
+    await mgr.processSummaries([makeStorySummary()]);
 
-    const subjectEntity = mgr.getEntity("subject", "auth-module");
+    const subjectEntity = mgr.getEntity("subject", SUBJECTS.authModule);
     expect(subjectEntity).toBeDefined();
-    expect(subjectEntity!.name).toBe("auth-module");
+    expect(subjectEntity!.name).toBe(SUBJECTS.authModule);
     expect(subjectEntity!.storyIds.length).toBeGreaterThan(0);
 
-    const typeEntity = mgr.getEntity("type", "development");
+    const typeEntity = mgr.getEntity("type", TYPES.implementation);
     expect(typeEntity).toBeDefined();
 
-    const scenarioEntity = mgr.getEntity("scenario", "software-engineering");
+    const scenarioEntity = mgr.getEntity("scenario", SCENARIOS.softwareCoding);
     expect(scenarioEntity).toBeDefined();
 
     mgr.close();
@@ -197,7 +143,7 @@ describe("StoryIndexManager", () => {
     const db = openDb("session-1");
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
-    await mgr.processSummaries([makeSummary()]);
+    await mgr.processSummaries([makeStorySummary()]);
     const active = mgr.getActiveStories();
     expect(active.length).toBeGreaterThan(0);
     expect(active[0].status).toBe("active");
@@ -212,7 +158,7 @@ describe("StoryIndexManager", () => {
 
     // First instance: create story
     const mgr1 = new StoryIndexManager(db, storyStorage, sessionId);
-    await mgr1.processSummaries([makeSummary()]);
+    await mgr1.processSummaries([makeStorySummary()]);
     const stories1 = mgr1.getAllStories();
     expect(stories1).toHaveLength(1);
     mgr1.close();
@@ -230,7 +176,7 @@ describe("StoryIndexManager", () => {
 
     expect(mgr.isProcessed("summaries/2026-04-21-0.md")).toBe(false);
 
-    await mgr.processSummaries([makeSummary()]);
+    await mgr.processSummaries([makeStorySummary()]);
 
     expect(mgr.isProcessed("summaries/2026-04-21-0.md")).toBe(true);
     mgr.close();
@@ -242,9 +188,9 @@ describe("StoryIndexManager", () => {
     const mgr = new StoryIndexManager(db, storyStorage, "session-1");
 
     const summaries = [
-      makeSummary({ attributes: { subject: "project-a", type: "development", scenario: "software-engineering" } }),
-      makeSummary({ attributes: { subject: "project-b", type: "exploration", scenario: "data-engineering" } }),
-      makeSummary({ attributes: { subject: "project-a", type: "development", scenario: "software-engineering" } }), // Same as first
+      makeStorySummary({ attributes: { subject: "project-a", type: TYPES.implementation, scenario: SCENARIOS.softwareCoding } }),
+      makeStorySummary({ attributes: { subject: "project-b", type: TYPES.exploration, scenario: SCENARIOS.dataEngineering } }),
+      makeStorySummary({ attributes: { subject: "project-a", type: TYPES.implementation, scenario: SCENARIOS.softwareCoding } }), // Same as first
     ];
 
     await mgr.processSummaries(summaries);

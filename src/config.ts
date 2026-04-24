@@ -20,6 +20,11 @@ const DEFAULTS: SmartContextConfig = {
   compactOverlapTokens: 1000,
   recentStoryCount: 10,
   recentSummaryCount: 3,
+  innerTurnInterval: 20,
+  maxActiveStories: 10,
+  activeStoryTTL: 40,
+  recentMessageCount: 30,
+  innerTurnMessageSample: 30,
   sessionFilter: "main",
 };
 
@@ -48,6 +53,11 @@ export function resolveConfig(
     compactOverlapTokens: positiveInt(src.compactOverlapTokens, DEFAULTS.compactOverlapTokens),
     recentStoryCount: positiveInt(src.recentStoryCount, DEFAULTS.recentStoryCount),
     recentSummaryCount: positiveInt(src.recentSummaryCount, DEFAULTS.recentSummaryCount),
+    innerTurnInterval: positiveInt(src.innerTurnInterval, DEFAULTS.innerTurnInterval),
+    maxActiveStories: positiveInt(src.maxActiveStories, DEFAULTS.maxActiveStories),
+    activeStoryTTL: positiveInt(src.activeStoryTTL, DEFAULTS.activeStoryTTL),
+    recentMessageCount: positiveInt(src.recentMessageCount, DEFAULTS.recentMessageCount),
+    innerTurnMessageSample: positiveInt(src.innerTurnMessageSample, DEFAULTS.innerTurnMessageSample),
     sessionFilter: parseSessionFilter(src.sessionFilter),
   };
 }

@@ -11,14 +11,14 @@ export const STORY_EXTRACT_SYSTEM_PROMPT =
   '{ "subject": "<target entity>", "type": "<agent action>", "scenario": "<work domain>", "content": "<narrative>" }\n\n' +
   "[Rules]\n" +
   "- subject: the target entity the agent is working on (project name, system name, topic). Short, stable, noun phrase.\n" +
-  "- type: the agent's action. Pick ONE from {development|testing|execution|exploration|assistance|debugging|analysis|decision|configuration}. Create new only if none fits.\n" +
-  "- scenario: the work domain. Pick ONE from {software-engineering|data-engineering|system-ops|security|content-creation|knowledge-mgmt|user-interaction|general}.\n" +
+  "- type: the agent's action. Pick ONE from {analysis|design|implementation|debugging|testing|exploration|execution|optimization|configuration|assistance|decision}. Create new only if none fits.\n" +
+  "- scenario: the work domain. Pick ONE from {software.coding|software.architecture|software.testing|software.devops|data.crawling|data.engineering|data.analytics|system.ops|system.automation|content.writing|content.design|content.media|media.public-opinion|research.knowledge|general}. Use parent domain (software|data|system|content|media|research) for broad scope.\n" +
   "- content: concise 2-3 sentence narrative. Do NOT copy raw text or JSON.\n" +
   "- Omit tool output details, file contents, and API responses.\n" +
   "- Each field must be a SINGLE value. NO comma-separated lists.\n\n" +
   "[Output]\n" +
   "Output ONLY a JSON array. No markdown fences. No extra text.\n" +
-  'Example: [{"subject":"opinion-analysis","type":"development","scenario":"software-engineering","content":"Built a multi-platform crawler pipeline."}]';
+  'Example: [{"subject":"opinion-analysis","type":"implementation","scenario":"data.crawling","content":"Built a multi-platform crawler pipeline."}]';
 
 export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and extract stories.
 
@@ -31,7 +31,9 @@ export const STORY_EXTRACT_USER_TEMPLATE = `Analyze the conversation below and e
 [Context after]
 {postOverlap}
 
-Extract stories as JSON. Write narrative summaries, not raw text.`;
+IMPORTANT: Output ONLY a JSON array. Each element MUST have exactly these 4 keys: subject, type, scenario, content.
+No markdown fences. No explanation. No extra fields.
+Example: [{"subject":"auth-module","type":"debugging","scenario":"software.coding","content":"Fixed token expiry issue."}]`;
 
 export const SEMANTIC_MATCH_PROMPT =
   "Determine whether the attributes of the following two stories semantically match. " +
@@ -97,6 +99,14 @@ export function parseStoryOrientedOutput(
   return stories;
 }
 
+/** Return the first non-empty string from a list of candidates. */
+function firstStr(...candidates: unknown[]): string | undefined {
+  for (const v of candidates) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 /** Parse JSON array output from LLM. */
 function parseStoryJsonOutput(
   raw: string,
@@ -104,46 +114,67 @@ function parseStoryJsonOutput(
   messageRange: [number, number],
 ): StorySummary[] {
   let text = raw.trim();
-  text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+  // Strip all markdown code fences
+  text = text.replace(/```(?:json)?\s*\n?/gi, "").trim();
 
   // Try to find a JSON array
   const arrMatch = text.match(/\[[\s\S]*\]/);
-  // If no array, try a single JSON object
-  const objMatch = !arrMatch ? text.match(/\{[\s\S]*\}/) : null;
-  if (!arrMatch && !objMatch) return [];
+  // If no array, try extracting JSON from code-block-like regions
+  if (!arrMatch) {
+    // Try each {...} block and wrap into array
+    const objMatches = [...text.matchAll(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)];
+    if (objMatches.length > 0) {
+      const wrapped = "[" + objMatches.map(m => m[0]).join(",") + "]";
+      try {
+        const parsed = JSON.parse(wrapped);
+        if (Array.isArray(parsed)) return buildStoriesFromArr(parsed, sourceSummary, messageRange);
+      } catch { /* continue */ }
+    }
+    // Single large object
+    const objMatch = text.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try {
+        const parsed = JSON.parse(objMatch[0]);
+        return buildStoriesFromArr(Array.isArray(parsed) ? parsed : [parsed], sourceSummary, messageRange);
+      } catch { return []; }
+    }
+    return [];
+  }
 
   try {
-    let arr: unknown[];
-    if (arrMatch) {
-      const parsed = JSON.parse(arrMatch[0]);
-      arr = Array.isArray(parsed) ? parsed : [parsed];
-    } else {
-      const parsed = JSON.parse(objMatch![0]);
-      arr = [parsed];
-    }
-
-    const stories: StorySummary[] = [];
-    for (const raw of arr) {
-      const item = raw as Record<string, unknown>;
-      const content = typeof item.content === "string" ? item.content.trim() : "";
-      if (content.length < 5) continue;
-
-      stories.push({
-        content,
-        attributes: {
-          subject: normalizeDimensionValue(typeof item.subject === "string" ? item.subject.trim() : "unknown"),
-          type: normalizeDimensionValue(typeof item.type === "string" ? item.type.trim() : "assistance"),
-          scenario: normalizeDimensionValue(typeof item.scenario === "string" ? item.scenario.trim() : "general"),
-        },
-        sourceSummary,
-        messageRange,
-        timestamp: Date.now(),
-      });
-    }
-    return stories;
+    const parsed = JSON.parse(arrMatch[0]);
+    return buildStoriesFromArr(Array.isArray(parsed) ? parsed : [parsed], sourceSummary, messageRange);
   } catch {
     return [];
   }
+}
+
+/** Build StorySummary[] from parsed JSON array items. */
+function buildStoriesFromArr(
+  arr: unknown[],
+  sourceSummary: string,
+  messageRange: [number, number],
+): StorySummary[] {
+  const stories: StorySummary[] = [];
+  for (const raw of arr) {
+    const item = raw as Record<string, unknown>;
+    // content: try standard field names
+    const content = firstStr(item.content, item.summary, item.narrative, item.description);
+    if (!content || content.length < 5) continue;
+
+    stories.push({
+      content,
+      attributes: {
+        subject: normalizeDimensionValue(firstStr(item.subject, item.target, item.entity, item.topic) || "unknown"),
+        type: normalizeDimensionValue(firstStr(item.type, item.action, item.category) || "assistance"),
+        scenario: normalizeDimensionValue(firstStr(item.scenario, item.domain, item.field) || "general"),
+      },
+      sourceSummary,
+      messageRange,
+      timestamp: Date.now(),
+    });
+  }
+  return stories;
 }
 
 function extractSection(text: string, heading: string): string | undefined {
@@ -206,8 +237,8 @@ export async function extractStoriesWithLLM(
       }
     }
 
-    const fullPrompt = STORY_EXTRACT_SYSTEM_PROMPT + "\n\n" + prompt + knownHint;
-    const rawOutput = await summarizer.summarize(fullPrompt, 2000);
+    const fullPrompt = prompt + knownHint;
+    const rawOutput = await summarizer.rawGenerate(STORY_EXTRACT_SYSTEM_PROMPT, fullPrompt, 2000);
 
     const stories = parseStoryOrientedOutput(rawOutput, sourceSummary, messageRange);
 
@@ -376,7 +407,7 @@ function inferSubject(files: Set<string>, userText: string): string {
 }
 
 function inferType(hasWrite: boolean, hasShellError: boolean, fileCount: number): string {
-  if (hasWrite) return "development";
+  if (hasWrite) return "implementation";
   if (hasShellError) return "debugging";
   if (fileCount > 0) return "exploration";
   return "assistance";
@@ -385,10 +416,10 @@ function inferType(hasWrite: boolean, hasShellError: boolean, fileCount: number)
 function inferScenario(files: Set<string>): string {
   if (files.size > 0) {
     const allPaths = [...files].join(" ");
-    if (/test|spec/i.test(allPaths)) return "software-engineering";
-    if (/config|setup/i.test(allPaths)) return "system-ops";
-    if (/deploy|ci|cd/i.test(allPaths)) return "system-ops";
-    return "software-engineering";
+    if (/test|spec/i.test(allPaths)) return "software.testing";
+    if (/config|setup/i.test(allPaths)) return "system.ops";
+    if (/deploy|ci|cd/i.test(allPaths)) return "software.devops";
+    return "software.coding";
   }
   return "general";
 }

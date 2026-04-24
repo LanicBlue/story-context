@@ -1,27 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { SmartContextEngine } from "../src/engine.js";
 import type { Summarizer } from "../src/types.js";
-
-function makeMessage(
-  role: "user" | "assistant" | "toolResult",
-  content: string,
-  extra?: Record<string, unknown>,
-) {
-  return { role, content, timestamp: Date.now(), ...extra };
-}
-
-function makeToolResult(
-  toolName: string,
-  content: string,
-  args?: Record<string, unknown>,
-) {
-  return makeMessage("toolResult", content, {
-    toolName,
-    args: args ?? {},
-  });
-}
-
-const SID = "test-session";
+import { SID, makeMessage, makeToolResult } from "./test-data.js";
 
 describe("SmartContextEngine basics", () => {
   it("reports correct engine info", () => {
@@ -251,6 +231,7 @@ describe("SmartContextEngine compact", () => {
   it("uses LLM summarizer when available", async () => {
     const mockSummarizer: Summarizer = {
       summarize: vi.fn().mockResolvedValue("# Compressed Summary\n## Task Intent\n- Test task\n## Conclusion\n- Done"),
+      rawGenerate: vi.fn().mockResolvedValue("[]"),
     };
 
     const engine = new SmartContextEngine(
@@ -265,12 +246,13 @@ describe("SmartContextEngine compact", () => {
     await fillSession(engine, SID, 20, 50);
     await engine.compact({ sessionId: SID, sessionFile: "" });
 
-    expect(mockSummarizer.summarize).toHaveBeenCalled();
+    expect(mockSummarizer.rawGenerate).toHaveBeenCalled();
   });
 
   it("falls back to structural summary when LLM fails", async () => {
     const mockSummarizer: Summarizer = {
       summarize: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
+      rawGenerate: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
     };
 
     const engine = new SmartContextEngine(

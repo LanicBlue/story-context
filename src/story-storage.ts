@@ -229,6 +229,8 @@ function parseStoryDocument(raw: string): StoryDocument {
     sources,
     status: (meta.status as StoryDocument["status"]) || "active",
     narrative: narrativeMatch?.[1]?.trim() || "",
+    activeUntilTurn: typeof meta.activeUntilTurn === "number" ? meta.activeUntilTurn : 0,
+    lastEditedTurn: typeof meta.lastEditedTurn === "number" ? meta.lastEditedTurn : 0,
     createdAt: meta.created ? Date.parse(meta.created) : Date.now(),
     lastUpdated: meta.lastUpdated ? Date.parse(meta.lastUpdated) : Date.now(),
   };
