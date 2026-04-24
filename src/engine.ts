@@ -691,6 +691,11 @@ export class SmartContextEngine {
     const loaded = this.messageStore.load(params.sessionId);
     if (loaded) {
       this.sessions.set(params.sessionId, loaded);
+
+      // Rebuild story index from SQLite
+      const storyMgr = this.getStoryManager(params.sessionId);
+      storyMgr.loadFromDb();
+
       return {
         bootstrapped: true,
         importedMessages: loaded.messages.length,

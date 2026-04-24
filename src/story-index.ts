@@ -288,6 +288,64 @@ export class StoryIndexManager {
     return this.index;
   }
 
+  // ── Bootstrap from SQLite ────────────────────────────────────────
+
+  /** Rebuild in-memory index from persisted SQLite data. */
+  loadFromDb(): void {
+    // Stories
+    const storyRows = this.db.prepare("SELECT * FROM stories").all() as Array<{
+      id: string; title: string; subject: string; type: string; scenario: string;
+      status: string; narrative: string; created_at: number; last_updated: number;
+    }>;
+    for (const r of storyRows) {
+      const sourceRows = this.db.prepare(
+        "SELECT summary_path, msg_start, msg_end, timestamp, snippet FROM story_sources WHERE story_id = ? ORDER BY timestamp"
+      ).all(r.id) as Array<{
+        summary_path: string; msg_start: number; msg_end: number; timestamp: number; snippet: string;
+      }>;
+      this.index.documents.set(r.id, {
+        id: r.id,
+        title: r.title,
+        attributes: { subject: r.subject, type: r.type, scenario: r.scenario },
+        sources: sourceRows.map(s => ({
+          summaryPath: s.summary_path,
+          messageRange: [s.msg_start, s.msg_end] as [number, number],
+          timestamp: s.timestamp,
+          snippet: s.snippet,
+        })),
+        status: r.status as StoryDocument["status"],
+        narrative: r.narrative,
+        createdAt: r.created_at,
+        lastUpdated: r.last_updated,
+      });
+    }
+
+    // Entities
+    const entityRows = this.db.prepare("SELECT * FROM entities").all() as Array<{
+      dimension: string; name: string; description: string; created_at: number; last_updated: number;
+    }>;
+    for (const r of entityRows) {
+      const seRows = this.db.prepare(
+        "SELECT story_id FROM story_entities WHERE dimension = ? AND entity_name = ?"
+      ).all(r.dimension, r.name) as Array<{ story_id: string }>;
+      this.index.entities.set(this.entityKey(r.dimension as Dimension, r.name), {
+        dimension: r.dimension as Dimension,
+        name: r.name,
+        description: r.description,
+        storyIds: seRows.map(se => se.story_id),
+        relatedEntities: [],
+        createdAt: r.created_at,
+        lastUpdated: r.last_updated,
+      });
+    }
+
+    // Processed summaries
+    const psRows = this.db.prepare("SELECT path FROM processed_summaries").all() as Array<{ path: string }>;
+    for (const r of psRows) {
+      this.index.processedSummaries.add(r.path);
+    }
+  }
+
   /** No-op: DB lifecycle managed by MessageStore. */
   close(): void {}
 }
