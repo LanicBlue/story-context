@@ -228,9 +228,9 @@ describe("SmartContextEngine compact", () => {
     }
   });
 
-  it("uses LLM summarizer when available", async () => {
+  it("uses structural summary for compression (no LLM in compact)", async () => {
     const mockSummarizer: Summarizer = {
-      summarize: vi.fn().mockResolvedValue("# Compressed Summary\n## Task Intent\n- Test task\n## Conclusion\n- Done"),
+      summarize: vi.fn().mockResolvedValue(""),
       rawGenerate: vi.fn().mockResolvedValue("[]"),
     };
 
@@ -246,33 +246,8 @@ describe("SmartContextEngine compact", () => {
     await fillSession(engine, SID, 20, 50);
     await engine.compact({ sessionId: SID, sessionFile: "" });
 
-    expect(mockSummarizer.rawGenerate).toHaveBeenCalled();
-  });
-
-  it("falls back to structural summary when LLM fails", async () => {
-    const mockSummarizer: Summarizer = {
-      summarize: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
-      rawGenerate: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
-    };
-
-    const engine = new SmartContextEngine(
-      {
-        maxHistoryTokens: 125,
-        compactCoreTokens: 75,
-        compactOverlapTokens: 12,
-      },
-      mockSummarizer,
-    );
-    await fillSession(engine, SID, 20, 50);
-
-    const result = await engine.compact({ sessionId: SID, sessionFile: "" });
-    expect(result.compacted).toBe(true);
-
-    const state = engine._getState(SID)!;
-    // Should still have compressed windows (structural fallback)
-    if (state.compressedWindows.length > 0) {
-      expect(state.compressedWindows[0].compressedChars).toBeGreaterThan(0);
-    }
+    // compact no longer calls rawGenerate — story extraction is in inner turn
+    expect(mockSummarizer.rawGenerate).not.toHaveBeenCalled();
   });
 
   it("handles force compact even when within budget", async () => {

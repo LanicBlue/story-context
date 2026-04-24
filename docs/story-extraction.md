@@ -1,8 +1,8 @@
-# Story Extraction Pipeline
+# Story Extraction & Management
 
 ## Overview
 
-During compaction, the engine extracts stories from each compression window. Stories capture what the agent did, what it worked on, and in what domain.
+Story management is handled by the **inner turn** mechanism, triggered every `innerTurnInterval` turns via `afterTurn()`. Inner turn B analyzes recent messages and outputs story operations (create/update/skip). Inner turn A acts as a failure recovery mechanism, generating filter rules when B fails.
 
 ## Three-Dimension Schema
 
@@ -10,70 +10,64 @@ Stories are categorized by three orthogonal dimensions from the agent's perspect
 
 | Dimension | Question | Predefined Set |
 |-----------|----------|----------------|
-| **type** | What action does the agent take? | development, testing, execution, exploration, assistance, debugging, analysis, decision, configuration |
+| **type** | What action does the agent take? | implementation, debugging, testing, exploration, analysis, design, optimization, configuration, assistance, decision, execution |
 | **subject** | What entity does the agent work on? | Free-form (project name, system name, topic) |
-| **scenario** | What domain does the work belong to? | software-engineering, data-engineering, system-ops, security, content-creation, knowledge-mgmt, user-interaction, general |
+| **scenario** | What domain does the work belong to? | software.coding, software.testing, software.devops, software.architecture, data.crawling, data.engineering, data.analytics, system.ops, system.automation, content.writing, content.design, content.media, media.public-opinion, research.knowledge, general |
 
 ### Design Rationale
 
 The three dimensions are intentionally orthogonal:
 
-- **type** is the agent's action verb (development vs debugging)
+- **type** is the agent's action verb (implementation vs debugging)
 - **subject** is the target entity (crawler vs auth-module)
-- **scenario** is the professional domain (software-engineering vs data-engineering)
+- **scenario** is the professional domain (software.coding vs data.crawling)
 
-Same project + same action + different domain = different story. This avoids the common pitfall of overlapping dimensions (e.g., "troubleshooting" as both a type and a scenario).
+Same project + same action + different domain = different story. This avoids overlapping dimensions.
 
-## LLM Extraction Prompt
+## Inner Turn B — Story Management
 
-The prompt uses a schema-first structure with `[Schema]/[Rules]/[Output]` sections for better small-model compliance:
+### Input
 
-```
-[Schema]
-Extract stories as a JSON array. Each element:
-{ "subject": "<target entity>", "type": "<agent action>", "scenario": "<work domain>", "content": "<narrative>" }
+InnerTurnB receives:
+- All existing stories (ID, attributes, narrative preview)
+- Known dimension values (for reuse encouragement)
+- Recent cleaned messages (last `innerTurnMessageSample` messages)
 
-[Rules]
-- subject: Short, stable, noun phrase.
-- type: Pick ONE from {predefined set}.
-- scenario: Pick ONE from {predefined set}.
-- content: Concise 2-3 sentence narrative.
-- Each field must be a SINGLE value. NO comma-separated lists.
+### Output Format
 
-[Output]
-Output ONLY a JSON array.
-```
-
-Known dimension values from existing stories are injected as `[Known Schema]` to encourage reuse and consistency.
-
-## Parsing Pipeline
-
-```
-LLM Output
-    │
-    ▼
-parseStoryJsonOutput()  ←── Try JSON array [...]
-    │                       Try single object {...}
-    │                       Normalize comma-separated values
-    │
-    ├── Success → StorySummary[]
-    │
-    ▼ (fallback)
-Legacy ---STORY--- blocks
-    │
-    ▼ (fallback)
-Structural extraction (no LLM)
-    │
-    ▼
-StorySummary[]
+```json
+{
+  "actions": [
+    { "action": "create", "story": { "subject": "...", "type": "...", "scenario": "...", "content": "..." } },
+    { "action": "update", "targetStoryId": "...", "updatedContent": "...", "append": true }
+  ]
+}
 ```
 
-### Dimension Normalization
+No changes: `{"actions":[]}`
 
-The `normalizeDimensionValue()` function handles common LLM output issues:
-- `"development,debugging"` → `"development"` (take first)
-- `"software-engineering，data-engineering"` → `"software-engineering"` (Chinese comma)
-- Trims whitespace
+### Batch Execution
+
+All actions execute all-or-nothing:
+- Any failure → rollback all created stories → trigger InnerTurnA
+- Create sets `activeUntilTurn = currentTurn + activeStoryTTL`
+- Update resets TTL and requires Round 2 confirmation with the full story
+
+### Round 2 (Update Confirmation)
+
+When B outputs update actions:
+1. Fetch full story documents for all update targets
+2. Send to B for confirmation with full narrative context
+3. Execute confirmed updates
+
+## Inner Turn A — Failure Recovery
+
+Triggered when B fails (JSON parse error, execution failure):
+
+1. Receives B's failure context + raw vs cleaned message samples
+2. Outputs new filter rules: `{"rules":[{"match":"contains|regex","pattern":"...","granularity":"message|block|line"}],"reason":"..."}`
+3. Rules are applied, B is retried
+4. A retries up to 3 times with injected failure hints
 
 ## Matching and Merging
 
@@ -85,22 +79,25 @@ normalizeDim(type)    === normalizeDim(other.type) &&
 normalizeDim(scenario) === normalizeDim(other.scenario)
 ```
 
-Normalization lowercases and strips comma-separated suffixes, so `"development,debugging"` matches `"development"`.
+Normalization takes the first value from comma-separated lists and trims whitespace. This handles common LLM output issues:
+- `"implementation,debugging"` → `"implementation"` (take first)
+- `"software.coding，data.crawling"` → `"software.coding"` (Chinese comma)
 
-Story IDs are generated from the normalized dimension values (SHA-256 hash), ensuring consistent IDs even with minor dimension value differences.
+Story IDs are generated from the normalized dimension values (SHA-256 hash), ensuring consistent IDs across similar dimension values.
 
-## Summary Output Format
+## Dimension Normalization
 
-Extracted stories are formatted as markdown for the summary file:
+The `normalizeDimensionValue()` function splits on commas (`,`, `，`, `、`) and takes the first value:
 
-```markdown
-## 1. auth-module — development · software-engineering
-
-Implemented JWT authentication with token refresh support.
-
----
-
-## 2. auth-module — debugging · system-ops
-
-Fixed token expiry causing 401 errors in production.
+```typescript
+"implementation,debugging" → "implementation"
+"software.coding，data.crawling" → "software.coding"
+"  debugging  " → "debugging"
 ```
+
+## Structural Fallback (story-extractor.ts)
+
+When inner turn is not yet available (no summarizer), `extractStoriesStructural()` provides a no-LLM fallback:
+- Segments messages by user message boundaries with no file overlap
+- Infers type from tool usage (write_file → implementation, shell error → debugging)
+- Infers scenario from file paths (test files → software.testing, etc.)

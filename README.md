@@ -1,6 +1,6 @@
 # Story Context
 
-An agent-centric context engine plugin for [OpenClaw](https://github.com/nicepkg/openclaw). Provides sliding-window context compression with story extraction, indexing, and retrieval.
+An agent-centric context engine plugin for [OpenClaw](https://github.com/nicepkg/openclaw). Provides sliding-window context compression with active story management via inner turn B→A architecture.
 
 ## Install
 
@@ -32,7 +32,7 @@ const engine = new SmartContextEngine({
 await engine.ingest({ sessionId: "main", message: msg });
 await engine.afterTurn({ sessionId: "main", sessionFile: "" });
 
-// Compress when budget exceeded
+// Compress when budget exceeded (pure compression, no story extraction)
 await engine.compact({ sessionId: "main", sessionFile: "" });
 
 // Build context for LLM
@@ -43,19 +43,20 @@ To use a custom OpenAI-compatible API (e.g., local Ollama), set `summaryMode: "h
 
 ## How It Works
 
-The engine manages context through three phases:
+The engine manages context through four phases:
 
 1. **Ingest** — Receive messages with content filtering and dedup
-2. **Compact** — Compress old messages into summaries, extract stories
-3. **Assemble** — Build a 3-layer context: focus story → recent stories → raw messages
+2. **AfterTurn** — Process messages, increment turn counter, trigger inner turn every N turns
+3. **Inner Turn** — Story management: B creates/updates stories, A recovers on B failure
+4. **Compact** — Pure compression: structural summary when over budget (no LLM)
 
-Stories are categorized by three orthogonal dimensions:
+Stories are managed by inner turn and categorized by three orthogonal dimensions:
 
 | Dimension | Agent Perspective | Examples |
 |-----------|-------------------|----------|
-| **type** | What action the agent takes | development, debugging, exploration, analysis, configuration |
+| **type** | What action the agent takes | implementation, debugging, exploration, analysis, configuration |
 | **subject** | What entity the agent works on | auth-module, crawler-pipeline, deployment |
-| **scenario** | What domain the work belongs to | software-engineering, data-engineering, system-ops, security |
+| **scenario** | What domain the work belongs to | software.coding, data.crawling, system.ops, general |
 
 ## Documentation
 

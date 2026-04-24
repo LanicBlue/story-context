@@ -3,11 +3,11 @@ import type { SessionState, SmartContextConfig, Summarizer } from "./types.js";
 import { ContentProcessor } from "./content-processor.js";
 import { ContentStorage } from "./content-storage.js";
 import { Compactor, extractText as compactorExtractText } from "./compactor.js";
-import { extractStoriesStructural, extractStoriesWithLLM, formatStoriesAsMarkdown } from "./story-extractor.js";
 import { StoryIndexManager } from "./story-index.js";
 import { StoryStorage } from "./story-storage.js";
 import { MessageStore } from "./message-store.js";
-import type { StorySummary, StoryDocument, EntityDocument } from "./story-types.js";
+import { runInnerTurn, sampleMessagesText } from "./inner-turn.js";
+import type { StoryDocument, EntityDocument } from "./story-types.js";
 
 // ContextEngine types — openclaw exposes these via the plugin-sdk surface.
 export type AssembleResult = {
@@ -290,10 +290,54 @@ export class SmartContextEngine {
         this.messageStore.upsertMessage(params.sessionId, i, msg);
       }
     }
+
+    // 3. Increment turn counter
+    s.currentTurn++;
+    s.turnsSinceInnerTurn++;
+
+    // 4. Expire old stories
+    const storyMgr = this.getStoryManager(params.sessionId);
+    storyMgr.expireOldStories(s.currentTurn);
+
+    // 5. Trigger inner turn if threshold reached
+    if (
+      s.turnsSinceInnerTurn >= this.config.innerTurnInterval &&
+      !s.innerTurnRunning &&
+      this.summarizer
+    ) {
+      s.innerTurnRunning = true;
+      s.turnsSinceInnerTurn = 0;
+
+      this.runInnerTurnAsync(params.sessionId).catch(() => {}).finally(() => {
+        const st = this.sessions.get(params.sessionId);
+        if (st) st.innerTurnRunning = false;
+      });
+    }
+
     this.messageStore.saveState(params.sessionId, s);
   }
 
   // ── Story Focus ─────────────────────────────────────────────────
+
+  private async runInnerTurnAsync(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    const storyMgr = this.getStoryManager(sessionId);
+
+    await runInnerTurn({
+      summarizer: this.summarizer!,
+      storyManager: storyMgr,
+      currentTurn: s.currentTurn,
+      activeStoryTTL: this.config.activeStoryTTL,
+      maxActiveStories: this.config.maxActiveStories,
+      sampleMessages: () => sampleMessagesText(s.messages, this.config.innerTurnMessageSample),
+      sampleRawCleaned: () => [],
+      applyFilterRules: () => {},
+    });
+
+    s.activeStories = storyMgr.getActiveStoriesByTurn(s.currentTurn).map(e => e.id);
+    this.messageStore.saveState(sessionId, s);
+  }
 
   /** Set the focused story for a session (tool-call or explicit). */
   focusStory(sessionId: string, storyId: string): void {
@@ -579,7 +623,6 @@ export class SmartContextEngine {
     }
 
     const tokensBefore = Math.ceil(totalChars / CHARS_PER_TOKEN);
-    const storyMgr = this.getStoryManager(params.sessionId);
 
     const coreChars = this.config.compactCoreTokens * CHARS_PER_TOKEN;
     const overlapChars = this.config.compactOverlapTokens * CHARS_PER_TOKEN;
@@ -603,43 +646,9 @@ export class SmartContextEngine {
         continue;
       }
 
-      let markdown: string;
-      let storySummaries: StorySummary[];
-      const knownDimensions = storyMgr.getKnownDimensions();
-      const dims = knownDimensions.subjects.length > 0 ? knownDimensions : undefined;
+      const markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
 
-      if (this.summarizer) {
-        const coreText = nonDroppedCore
-          .map((m) => `[${extractRole(m)}]: ${extractText(m)}`)
-          .join("\n\n");
-        try {
-          const { rawOutput, stories: llmStories } = await extractStoriesWithLLM(
-            nonDroppedCore,
-            window.preOverlap,
-            window.postOverlap,
-            this.summarizer,
-            "",
-            [window.coreStartIdx, window.coreEndIdx],
-            dims,
-          );
-          markdown = (llmStories.length > 0 ? formatStoriesAsMarkdown(llmStories) : "")
-            || rawOutput
-            || this.compactor.buildStructuralSummary(nonDroppedCore);
-          storySummaries = llmStories;
-        } catch {
-          markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
-          storySummaries = extractStoriesStructural(
-            nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
-          );
-        }
-      } else {
-        markdown = this.compactor.buildStructuralSummary(nonDroppedCore);
-        storySummaries = extractStoriesStructural(
-          nonDroppedCore, "", [window.coreStartIdx, window.coreEndIdx], dims,
-        );
-      }
-
-      if (storySummaries.length === 0 && markdown.trim().length === 0) {
+      if (markdown.trim().length === 0) {
         s.activeEnd = window.coreEndIdx;
         totalChars = this.totalActiveChars(s);
         continue;
@@ -652,18 +661,10 @@ export class SmartContextEngine {
         window.coreTotalChars,
       );
 
-      storySummaries = storySummaries.map((e) => ({ ...e, sourceSummary: compressed.storagePath }));
-
-      // Record window range in DB (messages already stored by ingest, no duplication)
       this.messageStore.addWindow(params.sessionId, compressed);
 
       s.compressedWindows.push(compressed);
       s.activeEnd = window.coreEndIdx;
-
-      if (storySummaries.length > 0) {
-        await storyMgr.processSummaries(storySummaries);
-        s.activeStories = storyMgr.getActiveStories().map((e) => e.id);
-      }
 
       totalChars = this.totalActiveChars(s);
     }
