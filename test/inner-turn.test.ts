@@ -3,8 +3,7 @@ import { runInnerTurn, sampleMessagesText } from "../src/inner-turn.js";
 import type { InnerTurnDeps } from "../src/inner-turn.js";
 import type { StoryDocument } from "../src/story-types.js";
 import type { StoryIndexManager } from "../src/story-index.js";
-import type { Summarizer } from "../src/types.js";
-import { TYPES, SCENARIOS, SUBJECTS, makeStoryDoc, makeMockSummarizer } from "./test-data.js";
+import { TYPES, SCENARIOS, SUBJECTS, makeStoryDoc, makeMockSummarizer, makeMessage } from "./test-data.js";
 
 function makeMockStoryManager(stories: StoryDocument[] = []) {
   const docs = new Map(stories.map(s => [s.id, { ...s }]));
@@ -66,8 +65,6 @@ function makeDeps(overrides: Partial<InnerTurnDeps> = {}): InnerTurnDeps {
   };
 }
 
-// ── InnerTurnB Tests ──────────────────────────────────────────────
-
 describe("InnerTurnB", () => {
   it("creates a new story when B outputs action=create", async () => {
     const summarizer = makeMockSummarizer([
@@ -115,9 +112,7 @@ describe("InnerTurnB", () => {
   it("updates an existing story (triggers Round 2)", async () => {
     const existingStory = makeStoryDoc({ id: "story-abc12345" });
     const summarizer = makeMockSummarizer([
-      // Round 1
       JSON.stringify({ actions: [{ action: "update", targetStoryId: "story-abc12345", updatedContent: "Also fixed refresh token.", append: true }] }),
-      // Round 2 (confirm)
       JSON.stringify({ actions: [{ action: "update", targetStoryId: "story-abc12345", updatedContent: "Also fixed refresh token.", append: true }] }),
     ]);
     const storyManager = makeMockStoryManager([existingStory]);
@@ -140,7 +135,6 @@ describe("InnerTurnB", () => {
       ] }),
     ]);
     const storyManager = makeMockStoryManager();
-    // updateStoryContentDirect throws for nonexistent story
     (storyManager.updateStoryContentDirect as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("Story nonexistent not found");
     });
@@ -149,21 +143,15 @@ describe("InnerTurnB", () => {
     const result = await runInnerTurn(deps);
 
     expect(result.success).toBe(false);
-    // Rollback should have been called for the created story
     expect(storyManager.removeStory).toHaveBeenCalled();
   });
 });
 
-// ── InnerTurnA Tests ──────────────────────────────────────────────
-
 describe("InnerTurnA (failure recovery)", () => {
   it("triggers A when B fails, A produces rules, B retries and succeeds", async () => {
     const summarizer = makeMockSummarizer([
-      // B Round 1 - fails (invalid JSON)
       "not valid json",
-      // A - produces rules
       JSON.stringify({ rules: [{ match: "contains", pattern: "npm warn", granularity: "message" }], reason: "Filter npm warnings" }),
-      // B Round 2 (retry) - succeeds
       JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed auth." } }] }),
     ]);
     const storyManager = makeMockStoryManager();
@@ -179,13 +167,12 @@ describe("InnerTurnA (failure recovery)", () => {
   });
 
   it("gives up when A fails after 3 retries", async () => {
-    // All B outputs invalid, all A outputs invalid
     const summarizer = makeMockSummarizer([
-      "bad json", // B fails
-      "also bad", // A fails
-      "still bad", // A retry 1
-      "nope", // A retry 2
-      "not json either", // A retry 3 → give up
+      "bad json",
+      "also bad",
+      "still bad",
+      "nope",
+      "not json either",
     ]);
     const storyManager = makeMockStoryManager();
     const deps = makeDeps({ summarizer, storyManager });
@@ -198,11 +185,8 @@ describe("InnerTurnA (failure recovery)", () => {
 
   it("gives up when B fails after 3 retries even with A succeeding", async () => {
     const summarizer = makeMockSummarizer([
-      // Attempt 1: B fails, A succeeds
       "bad", JSON.stringify({ rules: [{ match: "contains", pattern: "x", granularity: "message" }], reason: "" }),
-      // Attempt 2: B fails, A succeeds
       "bad", JSON.stringify({ rules: [{ match: "contains", pattern: "y", granularity: "message" }], reason: "" }),
-      // Attempt 3: B fails, A succeeds
       "bad", JSON.stringify({ rules: [{ match: "contains", pattern: "z", granularity: "message" }], reason: "" }),
     ]);
     const storyManager = makeMockStoryManager();
@@ -214,8 +198,6 @@ describe("InnerTurnA (failure recovery)", () => {
     expect(result.error).toContain("B failed after retries");
   });
 });
-
-// ── Active Story Lifecycle Tests ──────────────────────────────────
 
 describe("Active Story lifecycle", () => {
   it("sets active TTL on create", async () => {
@@ -229,8 +211,8 @@ describe("Active Story lifecycle", () => {
 
     expect(storyManager.createStoryDirect).toHaveBeenCalledWith(
       expect.objectContaining({ subject: SUBJECTS.authModule }),
-      60, // currentTurn
-      40, // activeStoryTTL
+      60,
+      40,
     );
   });
 
@@ -263,13 +245,11 @@ describe("Active Story lifecycle", () => {
   });
 });
 
-// ── Message Sampling Tests ────────────────────────────────────────
-
 describe("sampleMessagesText", () => {
   it("formats messages with role prefix", () => {
     const messages = [
-      { role: "user", content: "Fix the bug", timestamp: Date.now() },
-      { role: "assistant", content: "I fixed it by changing the auth logic", timestamp: Date.now() },
+      makeMessage("user", "Fix the bug"),
+      makeMessage("assistant", "I fixed it by changing the auth logic"),
     ];
 
     const result = sampleMessagesText(messages, 10);
@@ -280,7 +260,7 @@ describe("sampleMessagesText", () => {
 
   it("truncates long messages", () => {
     const messages = [
-      { role: "user", content: "x".repeat(500), timestamp: Date.now() },
+      makeMessage("user", "x".repeat(500)),
     ];
 
     const result = sampleMessagesText(messages, 10);
@@ -289,16 +269,14 @@ describe("sampleMessagesText", () => {
   });
 
   it("respects limit parameter", () => {
-    const messages = Array.from({ length: 50 }, (_, i) => ({
-      role: "user" as const,
-      content: `msg ${i}`,
-      timestamp: Date.now(),
-    }));
+    const messages = Array.from({ length: 50 }, (_, i) =>
+      makeMessage("user", `msg ${i}`),
+    );
 
     const result = sampleMessagesText(messages, 5);
 
     const lines = result.split("\n").filter(Boolean);
     expect(lines.length).toBe(5);
-    expect(lines[4]).toContain("msg 49"); // last 5
+    expect(lines[4]).toContain("msg 49");
   });
 });

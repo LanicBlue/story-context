@@ -24,9 +24,6 @@ describe("cosineSimilarity", () => {
   });
 
   it("computes similarity correctly", () => {
-    // [1, 2, 3] · [4, 5, 6] = 4+10+18 = 32
-    // |a| = sqrt(14), |b| = sqrt(77)
-    // cos = 32 / sqrt(14*77) = 32 / sqrt(1078)
     const a = [1, 2, 3];
     const b = [4, 5, 6];
     expect(cosineSimilarity(a, b)).toBeCloseTo(32 / Math.sqrt(14 * 77));

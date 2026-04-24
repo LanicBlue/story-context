@@ -203,30 +203,6 @@ describe("ContentProcessor", () => {
     });
   });
 
-  describe("mixed content", () => {
-    it("processes text + image in same message", async () => {
-      const cp = makeProcessor();
-      const result = await cp.processContent(
-        [
-          { type: "text", text: "Here is the screenshot:" },
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: Buffer.from("screenshot").toString("base64"),
-            },
-          },
-          { type: "text", text: "The error is visible above." },
-        ],
-        "s1",
-      );
-      expect(result.contextText).toContain("Here is the screenshot:");
-      expect(result.contextText).toContain("image stored:");
-      expect(result.contextText).toContain("The error is visible above.");
-    });
-  });
-
   describe("content filtering", () => {
     it("drops message when filter matches at message level", async () => {
       const cp = makeProcessor({
@@ -273,6 +249,30 @@ describe("ContentProcessor", () => {
         "s1",
       );
       expect(result.contextText).toBe("[info] useful");
+    });
+  });
+
+  describe("mixed content", () => {
+    it("processes text + image in same message", async () => {
+      const cp = makeProcessor();
+      const result = await cp.processContent(
+        [
+          { type: "text", text: "Here is the screenshot:" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: Buffer.from("screenshot").toString("base64"),
+            },
+          },
+          { type: "text", text: "The error is visible above." },
+        ],
+        "s1",
+      );
+      expect(result.contextText).toContain("Here is the screenshot:");
+      expect(result.contextText).toContain("image stored:");
+      expect(result.contextText).toContain("The error is visible above.");
     });
   });
 

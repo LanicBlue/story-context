@@ -348,19 +348,45 @@ export async function loadConversation(convId: number, opts?: { limit?: number; 
   return { messages: result, totalTokens, totalCount };
 }
 
-// ── JSONL Loader ──────────────────────────────────────────────────
+// ── JSONL Loader (from smoke-test.mts) ────────────────────────────
 
-/** Extract text from a message content array (skip thinking blocks). */
-function extractText(content: unknown): string {
+/** Extract text from content blocks (skip thinking). */
+function jsonlExtractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .filter((p: any) => p.type === "text" && typeof p.text === "string")
-    .map((p: any) => p.text)
-    .join("\n");
+    .map((b: any) => {
+      if (typeof b === "string") return b;
+      if (b && b.type === "thinking") return "";
+      return b.text ?? b.content ?? "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+type ContentBlock = { type: string; text?: string; id?: string; name?: string; arguments?: Record<string, unknown> };
+
+function normalizeContent(content: unknown): ContentBlock[] {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.map((b: any) => {
+    if (typeof b === "string") return { type: "text", text: b };
+    if (b && typeof b === "object") {
+      return {
+        type: b.type ?? "unknown",
+        text: typeof b.text === "string" ? b.text : undefined,
+        id: typeof b.id === "string" ? b.id : undefined,
+        name: typeof b.name === "string" ? b.name : undefined,
+        arguments: b.arguments && typeof b.arguments === "object" ? b.arguments as Record<string, unknown> : undefined,
+      };
+    }
+    return { type: "unknown" };
+  });
 }
 
 /** Load a conversation from a JSONL session file.
+ *  Handles user/assistant/toolResult with toolCall separation.
  *  @param fileIndex  Index into JSONL_FILES array (0 or 1)
  *  @param opts.limit Max messages to return
  *  @param opts.offset Skip first N messages */
@@ -372,23 +398,43 @@ export function loadJsonlConversation(
   const filePath = JSONL_FILES[fileIndex];
   const raw = readFileSync(filePath, "utf-8");
 
-  const allMessages: Array<Record<string, unknown>> = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line);
-      if (obj.type !== "message") continue;
-      const msg = obj.message as { role: string; content: unknown; timestamp?: number };
-      const role = msg.role as "user" | "assistant" | "toolResult";
-      const text = extractText(msg.content);
-      if (!text) continue;
+  type JsonlMessage = { role: string; content: unknown; toolCallId?: string; toolName?: string; isError?: boolean; timestamp?: number };
+  type JsonlEntry = { type: string; message?: JsonlMessage };
 
-      allMessages.push({
-        role,
-        content: text,
-        timestamp: msg.timestamp ?? Date.now(),
-      });
-    } catch { /* skip malformed lines */ }
+  const allMessages: Array<Record<string, unknown>> = [];
+  for (const line of raw.split("\n").filter(Boolean)) {
+    let entry: JsonlEntry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry.type !== "message" || !entry.message) continue;
+    const msg = entry.message;
+
+    if (msg.role === "user") {
+      const text = jsonlExtractText(msg.content);
+      if (text) allMessages.push({ role: "user", content: text, timestamp: msg.timestamp ?? Date.now() });
+
+    } else if (msg.role === "assistant") {
+      const blocks = normalizeContent(msg.content);
+      const textParts: string[] = [];
+      const toolCalls: Array<Record<string, unknown>> = [];
+      for (const b of blocks) {
+        if (b.type === "toolCall") {
+          toolCalls.push({ type: "toolCall", id: b.id, name: b.name, arguments: b.arguments });
+        } else if (b.text) {
+          textParts.push(b.text);
+        }
+      }
+      const text = textParts.join("\n").trim();
+      if (text) allMessages.push({ role: "assistant", content: text, timestamp: msg.timestamp ?? Date.now() });
+      for (const tc of toolCalls) {
+        allMessages.push({ role: "assistant", content: "", toolCalls: [tc], timestamp: msg.timestamp ?? Date.now() });
+      }
+
+    } else if (msg.role === "toolResult") {
+      const text = jsonlExtractText(msg.content);
+      if (text) {
+        allMessages.push({ role: "toolResult", content: text, toolName: msg.toolName ?? "unknown", args: {}, timestamp: msg.timestamp ?? Date.now() });
+      }
+    }
   }
 
   const offset = opts?.offset ?? 0;

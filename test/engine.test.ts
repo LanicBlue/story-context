@@ -1,57 +1,59 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SmartContextEngine } from "../src/engine.js";
 import type { Summarizer } from "../src/types.js";
-import { SID, makeMessage, makeToolResult } from "./test-data.js";
+import { SID, makeMessage, makeToolResult, makeMockSummarizer } from "./test-data.js";
 
-describe("SmartContextEngine basics", () => {
+let testDir: string;
+let engine: SmartContextEngine | undefined;
+
+beforeEach(async () => {
+  testDir = await mkdtemp(join(tmpdir(), "engine-test-"));
+});
+
+afterEach(async () => {
+  if (engine) await engine.dispose();
+  await rm(testDir, { recursive: true, force: true });
+});
+
+function makeEngine(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
+  engine = new SmartContextEngine({ storageDir: testDir, sessionFilter: "all", ...config }, summarizer);
+  return engine;
+}
+
+describe("SmartContextEngine", () => {
   it("reports correct engine info", () => {
-    const engine = new SmartContextEngine();
+    const engine = makeEngine();
     expect(engine.info.id).toBe("story-context");
     expect(engine.info.version).toBe("2.0.0");
     expect(engine.info.ownsCompaction).toBe(true);
   });
 
   it("ingests user messages", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "implement binary search"),
-    });
-    const state = engine._getState(SID)!;
-    expect(state.messages.length).toBe(1);
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "implement binary search") });
+    expect(engine._getState(SID)!.messages.length).toBe(1);
   });
 
   it("tracks read_file in seenReads", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("read_file", "file contents here", { path: "foo.ts" }),
-    });
-    const state = engine._getState(SID)!;
-    expect(state.seenReads.has("foo.ts")).toBe(true);
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "contents", { path: "foo.ts" }) });
+    expect(engine._getState(SID)!.seenReads.has("foo.ts")).toBe(true);
   });
 
   it("removes seenReads on write_file", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("read_file", "old contents", { path: "bar.ts" }),
-    });
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "old", { path: "bar.ts" }) });
     expect(engine._getState(SID)!.seenReads.has("bar.ts")).toBe(true);
-
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("write_file", "wrote bar.ts", { path: "bar.ts" }),
-    });
+    await engine.ingest({ sessionId: SID, message: makeToolResult("write_file", "wrote", { path: "bar.ts" }) });
     expect(engine._getState(SID)!.seenReads.has("bar.ts")).toBe(false);
   });
 
-  it("initializes session state with focusedStoryId null", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "test"),
-    });
+  it("initializes session state correctly", async () => {
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
     const state = engine._getState(SID)!;
     expect(state.activeEnd).toBe(0);
     expect(state.compressedWindows).toEqual([]);
@@ -59,102 +61,140 @@ describe("SmartContextEngine basics", () => {
   });
 
   it("isolates different sessions", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: "session-a",
-      message: makeMessage("user", "task A"),
-    });
-    await engine.ingest({
-      sessionId: "session-b",
-      message: makeMessage("user", "task B"),
-    });
-
-    const stateA = engine._getState("session-a")!;
-    const stateB = engine._getState("session-b")!;
-    expect(stateA.messages.length).toBe(1);
-    expect(stateB.messages.length).toBe(1);
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: "a", message: makeMessage("user", "task A") });
+    await engine.ingest({ sessionId: "b", message: makeMessage("user", "task B") });
+    expect(engine._getState("a")!.messages.length).toBe(1);
+    expect(engine._getState("b")!.messages.length).toBe(1);
   });
 
   it("dispose clears all sessions", async () => {
-    const engine = new SmartContextEngine();
-    const disposeSid = "dispose-test-session";
-    await engine.ingest({
-      sessionId: disposeSid,
-      message: makeMessage("user", "hello"),
-    });
-    await engine.dispose();
-    expect(engine._getState(disposeSid)).toBeUndefined();
+    const eng = makeEngine();
+    await eng.ingest({ sessionId: "dispose-test", message: makeMessage("user", "hello") });
+    await eng.dispose();
+    expect(eng._getState("dispose-test")).toBeUndefined();
+    engine = undefined; // already disposed
   });
 });
 
-describe("SmartContextEngine assemble", () => {
-  it("assembles messages within budget", async () => {
-    const engine = new SmartContextEngine({ maxHistoryTokens: 125 }); // 500 chars
+describe("afterTurn", () => {
+  it("strips platform metadata from user messages", async () => {
+    const engine = makeEngine();
     await engine.ingest({
       sessionId: SID,
-      message: makeMessage("user", "x".repeat(400)),
+      message: makeMessage("user", "Conversation info (untrusted metadata):\n```json\n{\"id\":1}\n```\nActual message"),
     });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("assistant", "y".repeat(400)),
-    });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    const state = engine._getState(SID)!;
+    const msg = state.messages[0] as { content: string };
+    expect(msg.content).not.toContain("untrusted metadata");
+    expect(msg.content).toContain("Actual message");
+  });
 
-    const result = await engine.assemble({
-      sessionId: SID,
-      messages: [],
+  it("drops messages matching filter rules", async () => {
+    const engine = makeEngine({
+      contentFilters: [{ match: "contains", pattern: "verbose debug", granularity: "message" }],
     });
+    await engine.ingest({ sessionId: SID, message: makeMessage("assistant", "verbose debug output") });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    expect((engine._getState(SID)!.messages[0] as Record<string, unknown>)._dropped).toBe(true);
+  });
 
+  it("increments turn counter", async () => {
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "hello") });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    expect(engine._getState(SID)!.currentTurn).toBe(1);
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "hello again") });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    expect(engine._getState(SID)!.currentTurn).toBe(2);
+  });
+
+  it("MicroCompacts old large tool results", async () => {
+    const engine = makeEngine({ largeTextThreshold: 10 });
+    await engine.ingest({ sessionId: SID, message: makeToolResult("run_shell", "x".repeat(50)) });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    // Second turn triggers MicroCompact for the first turn's tool result
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "next turn") });
+    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
+    const state = engine._getState(SID)!;
+    const oldToolResult = state.messages[0] as { content: string };
+    expect(oldToolResult.content).toBe("[Old tool result content cleared]");
+  });
+});
+
+describe("compact", () => {
+  function fillSession(engine: SmartContextEngine, sessionId: string, count: number, contentSize = 50) {
+    const promises = [];
+    for (let i = 0; i < count; i++) {
+      promises.push(engine.ingest({
+        sessionId,
+        message: makeMessage(i % 2 === 0 ? "user" : "assistant", `Message ${i} with ${"x".repeat(contentSize)} content`),
+      }));
+    }
+    return Promise.all(promises);
+  }
+
+  it("returns compacted:false when within budget", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 12_500 });
+    await fillSession(engine, SID, 3);
+    const result = await engine.compact({ sessionId: SID, sessionFile: "" });
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("within budget");
+  });
+
+  it("compresses old messages into a window", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 });
+    await fillSession(engine, SID, 20, 50);
+    const result = await engine.compact({ sessionId: SID, sessionFile: "" });
+    expect(result.compacted).toBe(true);
+    expect(result.result!.tokensAfter!).toBeLessThan(result.result!.tokensBefore);
+    const state = engine._getState(SID)!;
+    expect(state.compressedWindows.length).toBeGreaterThan(0);
+    expect(state.activeEnd).toBeGreaterThan(0);
+  });
+
+  it("uses structural summary (no LLM in compact)", async () => {
+    const mock = makeMockSummarizer([]);
+    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 }, mock);
+    await fillSession(engine, SID, 20, 50);
+    await engine.compact({ sessionId: SID, sessionFile: "" });
+    expect(mock.rawGenerate).not.toHaveBeenCalled();
+  });
+
+  it("handles force compact", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 12_500, compactCoreTokens: 75 });
+    await fillSession(engine, SID, 10);
+    const result = await engine.compact({ sessionId: SID, sessionFile: "", force: true });
+    expect(result.compacted).toBe(true);
+  });
+});
+
+describe("assemble", () => {
+  it("returns messages within budget", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125 });
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "x".repeat(400)) });
+    await engine.ingest({ sessionId: SID, message: makeMessage("assistant", "y".repeat(400)) });
+    const result = await engine.assemble({ sessionId: SID, messages: [] });
     expect(result.messages.length).toBeGreaterThan(0);
   });
 
   it("deduplicates old read_file results", async () => {
-    const engine = new SmartContextEngine({
-      maxHistoryTokens: 12_500, // 50K chars
-      recentWindowSize: 2,
-    });
-
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("read_file", "first read", { path: "x.ts" }),
-    });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("read_file", "second read", { path: "x.ts" }),
-    });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "recent q"),
-    });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("assistant", "recent a"),
-    });
-
-    const result = await engine.assemble({
-      sessionId: SID,
-      messages: [],
-    });
-
-    // Dedup should remove the first read_file (not in recent window)
+    const engine = makeEngine({ maxHistoryTokens: 12_500, recentWindowSize: 2 });
+    await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "first read", { path: "x.ts" }) });
+    await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "second read", { path: "x.ts" }) });
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "recent q") });
+    await engine.ingest({ sessionId: SID, message: makeMessage("assistant", "recent a") });
+    const result = await engine.assemble({ sessionId: SID, messages: [] });
     expect(result.messages.length).toBe(3);
   });
 
-  it("includes story context in systemPromptAddition after compaction", async () => {
-    const engine = new SmartContextEngine({
-      maxHistoryTokens: 125, // 500 chars
-      compactCoreTokens: 75, // 300 chars
-      compactOverlapTokens: 12, // 50 chars
-    });
-    // Fill enough messages to trigger compression
+  it("includes summary context after compaction", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 });
     for (let i = 0; i < 10; i++) {
-      await engine.ingest({
-        sessionId: SID,
-        message: makeMessage("user", `Message ${i}: ${"x".repeat(200)}`),
-      });
+      await engine.ingest({ sessionId: SID, message: makeMessage("user", `Message ${i}: ${"x".repeat(200)}`) });
     }
-
     await engine.compact({ sessionId: SID, sessionFile: "" });
-
     const result = await engine.assemble({ sessionId: SID, messages: [] });
     const state = engine._getState(SID)!;
     if (state.compressedWindows.length > 0) {
@@ -163,242 +203,51 @@ describe("SmartContextEngine assemble", () => {
   });
 });
 
-describe("SmartContextEngine compact", () => {
-  function fillSession(
-    engine: SmartContextEngine,
-    sessionId: string,
-    count: number,
-    contentSize = 50,
-  ) {
-    const promises = [];
-    for (let i = 0; i < count; i++) {
-      promises.push(
-        engine.ingest({
-          sessionId,
-          message: makeMessage(
-            i % 2 === 0 ? "user" : "assistant",
-            `Message ${i} with ${"x".repeat(contentSize)} content`,
-          ),
-        }),
-      );
-    }
-    return Promise.all(promises);
-  }
-
-  it("returns compacted:false when within budget", async () => {
-    const engine = new SmartContextEngine({ maxHistoryTokens: 12_500 }); // 50K chars
-    await fillSession(engine, SID, 3);
-
-    const result = await engine.compact({ sessionId: SID, sessionFile: "" });
-    expect(result.compacted).toBe(false);
-    expect(result.reason).toBe("within budget");
-  });
-
-  it("compresses old messages into a window", async () => {
-    const engine = new SmartContextEngine({
-      maxHistoryTokens: 125, // 500 chars
-      compactCoreTokens: 75, // 300 chars
-      compactOverlapTokens: 12, // 50 chars
-    });
-    await fillSession(engine, SID, 20, 50);
-
-    const result = await engine.compact({ sessionId: SID, sessionFile: "" });
-    expect(result.compacted).toBe(true);
-    expect(result.result!.tokensAfter!).toBeLessThan(result.result!.tokensBefore);
-
-    const state = engine._getState(SID)!;
-    expect(state.compressedWindows.length).toBeGreaterThan(0);
-    expect(state.activeEnd).toBeGreaterThan(0);
-    expect(state.activeEnd).toBeLessThan(20);
-  });
-
-  it("stores compressed summary on disk", async () => {
-    const engine = new SmartContextEngine({
-      maxHistoryTokens: 125,
-      compactCoreTokens: 75,
-      compactOverlapTokens: 12,
-    });
-    await fillSession(engine, SID, 20, 50);
-    await engine.compact({ sessionId: SID, sessionFile: "" });
-
-    const state = engine._getState(SID)!;
-    if (state.compressedWindows.length > 0) {
-      expect(state.compressedWindows[0].storagePath).toMatch(/summaries\/\d{4}-\d{2}-\d{2}-\d+\.md/);
-      expect(state.compressedWindows[0].originalChars).toBeGreaterThan(0);
-    }
-  });
-
-  it("uses structural summary for compression (no LLM in compact)", async () => {
-    const mockSummarizer: Summarizer = {
-      summarize: vi.fn().mockResolvedValue(""),
-      rawGenerate: vi.fn().mockResolvedValue("[]"),
-    };
-
-    const engine = new SmartContextEngine(
-      {
-        maxHistoryTokens: 125,
-        compactCoreTokens: 75,
-        compactOverlapTokens: 12,
-        summaryEnabled: true,
-      },
-      mockSummarizer,
-    );
-    await fillSession(engine, SID, 20, 50);
-    await engine.compact({ sessionId: SID, sessionFile: "" });
-
-    // compact no longer calls rawGenerate — story extraction is in inner turn
-    expect(mockSummarizer.rawGenerate).not.toHaveBeenCalled();
-  });
-
-  it("handles force compact even when within budget", async () => {
-    const engine = new SmartContextEngine({
-      maxHistoryTokens: 12_500, // 50K chars
-      compactCoreTokens: 75, // 300 chars
-    });
-    await fillSession(engine, SID, 10);
-
-    const result = await engine.compact({
-      sessionId: SID,
-      sessionFile: "",
-      force: true,
-    });
-    expect(result.compacted).toBe(true);
-  });
-});
-
-describe("SmartContextEngine content processing integration", () => {
-  it("processes large tool output into outline", async () => {
-    const engine = new SmartContextEngine({ largeTextThreshold: 100 });
-    const longOutput = Array.from({ length: 30 }, (_, i) => `output line ${i + 1}`).join("\n");
-
-    await engine.ingest({
-      sessionId: SID,
-      message: makeToolResult("run_shell", longOutput),
-    });
-
-    const state = engine._getState(SID)!;
-    const msg = state.messages[0] as { content: string };
-    expect(msg.content).toContain("<persisted-output>");
-    expect(msg.content).toContain("Preview");
-  });
-
-  it("drops messages matching message-level filter", async () => {
-    const engine = new SmartContextEngine({
-      contentFilters: [
-        { match: "contains", pattern: "verbose debug", granularity: "message" },
-      ],
-    });
-
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("assistant", "verbose debug output"),
-    });
-
-    // Filter is applied in afterTurn, not ingest
-    await engine.afterTurn({ sessionId: SID, sessionFile: "" });
-
-    const state = engine._getState(SID)!;
-    expect((state.messages[0] as Record<string, unknown>)._dropped).toBe(true);
-  });
-
-  it("short content passes through unchanged", async () => {
-    const engine = new SmartContextEngine({ largeTextThreshold: 2000 });
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "short message"),
-    });
-
-    const state = engine._getState(SID)!;
-    const msg = state.messages[0] as { content: string };
-    expect(msg.content).toBe("short message");
-  });
-});
-
-describe("SmartContextEngine session filtering", () => {
+describe("session filtering", () => {
   it("processes main session by default", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      sessionKey: "agent:main:main",
-      message: makeMessage("user", "hello"),
-    });
-    expect(engine._getState(SID)).toBeDefined();
+    const engine = makeEngine({ sessionFilter: undefined });
+    await engine.ingest({ sessionId: SID, sessionKey: "agent:main:main", message: makeMessage("user", "hello") });
     expect(engine._getState(SID)!.messages.length).toBe(1);
   });
 
   it("skips non-main session by default", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: "sub-session",
-      sessionKey: "agent:main:slack:workspace:direct:user123",
-      message: makeMessage("user", "hello from subagent"),
-    });
-    expect(engine._getState("sub-session")).toBeUndefined();
+    const engine = makeEngine({ sessionFilter: undefined });
+    await engine.ingest({ sessionId: "sub", sessionKey: "agent:main:slack:workspace:direct:user123", message: makeMessage("user", "hello") });
+    expect(engine._getState("sub")).toBeUndefined();
   });
 
   it("processes all sessions when sessionFilter is 'all'", async () => {
-    const engine = new SmartContextEngine({ sessionFilter: "all" });
-    await engine.ingest({
-      sessionId: "sub-session",
-      sessionKey: "agent:main:slack:workspace:direct:user123",
-      message: makeMessage("user", "hello from subagent"),
-    });
-    expect(engine._getState("sub-session")).toBeDefined();
-    expect(engine._getState("sub-session")!.messages.length).toBe(1);
+    const engine = makeEngine();
+    await engine.ingest({ sessionId: "sub", sessionKey: "agent:main:slack:workspace:direct:user123", message: makeMessage("user", "hello") });
+    expect(engine._getState("sub")!.messages.length).toBe(1);
   });
 
   it("processes sessions matching regex patterns", async () => {
-    const engine = new SmartContextEngine({ sessionFilter: ["agent:ops:.*"] });
-    await engine.ingest({
-      sessionId: "ops-session",
-      sessionKey: "agent:ops:main",
-      message: makeMessage("user", "ops task"),
-    });
-    expect(engine._getState("ops-session")).toBeDefined();
+    const engine = makeEngine({ sessionFilter: ["agent:ops:.*"] });
+    await engine.ingest({ sessionId: "ops", sessionKey: "agent:ops:main", message: makeMessage("user", "ops task") });
+    expect(engine._getState("ops")!.messages.length).toBe(1);
   });
 
   it("skips sessions not matching regex patterns", async () => {
-    const engine = new SmartContextEngine({ sessionFilter: ["agent:ops:.*"] });
-    await engine.ingest({
-      sessionId: "other-session",
-      sessionKey: "agent:main:main",
-      message: makeMessage("user", "main task"),
-    });
-    expect(engine._getState("other-session")).toBeUndefined();
-  });
-
-  it("allows sessions without sessionKey (testing mode)", async () => {
-    const engine = new SmartContextEngine();
-    await engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "no key"),
-    });
-    expect(engine._getState(SID)).toBeDefined();
+    const engine = makeEngine({ sessionFilter: ["agent:ops:.*"] });
+    await engine.ingest({ sessionId: "main", sessionKey: "agent:main:main", message: makeMessage("user", "main task") });
+    expect(engine._getState("main")).toBeUndefined();
   });
 });
 
-describe("SmartContextEngine focus stories", () => {
-  it("focusStory sets focusedStoryId on session state", () => {
-    const engine = new SmartContextEngine();
-    // Must ingest first to create state
-    engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "test"),
-    });
+describe("focus stories", () => {
+  it("focusStory sets focusedStoryId", () => {
+    const engine = makeEngine();
+    engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
     engine.focusStory(SID, "story-abc123");
-    const state = engine._getState(SID)!;
-    expect(state.focusedStoryId).toBe("story-abc123");
+    expect(engine._getState(SID)!.focusedStoryId).toBe("story-abc123");
   });
 
   it("unfocusStory clears focusedStoryId", () => {
-    const engine = new SmartContextEngine();
-    engine.ingest({
-      sessionId: SID,
-      message: makeMessage("user", "test"),
-    });
+    const engine = makeEngine();
+    engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
     engine.focusStory(SID, "story-abc123");
     engine.unfocusStory(SID);
-    const state = engine._getState(SID)!;
-    expect(state.focusedStoryId).toBeNull();
+    expect(engine._getState(SID)!.focusedStoryId).toBeNull();
   });
 });

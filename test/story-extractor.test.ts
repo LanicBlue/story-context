@@ -5,11 +5,7 @@ import {
   formatStoriesAsMarkdown,
   normalizeDimensionValue,
 } from "../src/story-extractor.js";
-import { TYPES, SCENARIOS, SUBJECTS, makeToolResult } from "./test-data.js";
-
-function makeMsg(role: string, content: string, extra?: Record<string, unknown>) {
-  return { role, content, ...extra };
-}
+import { TYPES, SCENARIOS, SUBJECTS, makeMessage, makeToolResult } from "./test-data.js";
 
 describe("parseStoryOrientedOutput", () => {
   it("parses JSON array output", () => {
@@ -168,7 +164,7 @@ describe("formatStoriesAsMarkdown", () => {
 describe("extractStoriesStructural", () => {
   it("extracts stories from tool-heavy messages", () => {
     const messages = [
-      makeMsg("user", "Fix the login bug"),
+      makeMessage("user", "Fix the login bug"),
       makeToolResult("read_file", "old code", { path: "src/auth.ts" }),
       makeToolResult("write_file", "fixed", { path: "src/auth.ts" }),
     ];
@@ -204,9 +200,9 @@ describe("extractStoriesStructural", () => {
 
   it("splits segments on new user message with no file overlap", () => {
     const messages = [
-      makeMsg("user", "First task"),
+      makeMessage("user", "First task"),
       makeToolResult("read_file", "content", { path: "src/a.ts" }),
-      makeMsg("user", "Completely different task"),
+      makeMessage("user", "Completely different task"),
       makeToolResult("read_file", "content", { path: "src/b.ts" }),
     ];
 

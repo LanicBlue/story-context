@@ -52,7 +52,6 @@ describe("filterLines", () => {
       { match: "regex", pattern: "^\\[debug\\]", granularity: "line", caseSensitive: true },
     ];
     const text = "[debug] starting\n[info] running\n[debug] done\n[info] finished";
-
     const result = filterLines(text, rules);
     expect(result).toBe("[info] running\n[info] finished");
   });
@@ -106,7 +105,7 @@ describe("applyContentFilters", () => {
       rules,
     );
     expect(result.dropMessage).toBe(false);
-    expect(result.filteredBlocks).toBeNull(); // no changes
+    expect(result.filteredBlocks).toBeNull();
   });
 
   it("removes matching blocks at block granularity", () => {

@@ -22,7 +22,7 @@ describe("generateOutline", () => {
     expect(o.totalLines).toBe(2);
     expect(o.head).toBe("hello\nworld");
     expect(o.sections).toEqual([]);
-    expect(o.tail).toBe(""); // too short for tail
+    expect(o.tail).toBe("");
   });
 
   it("extracts head and tail from long plain text", () => {
@@ -34,7 +34,7 @@ describe("generateOutline", () => {
     expect(o.head).toContain("line 1");
     expect(o.tail.split("\n").length).toBe(3);
     expect(o.tail).toContain("line 50");
-    expect(o.sections).toEqual([]); // no markers
+    expect(o.sections).toEqual([]);
   });
 
   it("detects markdown headings as sections", () => {
@@ -82,7 +82,7 @@ describe("generateOutline", () => {
     ].join("\n");
 
     const o = generateOutline(text, { headLines: 1, tailLines: 1 });
-    expect(o.sections.length).toBe(1); // Only "ANOTHER SECTION" in range
+    expect(o.sections.length).toBe(1);
     expect(o.sections[0].label).toBe("ANOTHER SECTION");
   });
 
@@ -107,7 +107,6 @@ describe("generateOutline", () => {
     );
     const text = lines.join("\n");
     const o = generateOutline(text, { headLines: 2, tailLines: 2, maxSections: 3 });
-
     expect(o.sections.length).toBe(3);
   });
 
