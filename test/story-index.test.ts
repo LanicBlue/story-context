@@ -8,7 +8,7 @@ import { StoryIndexManager } from "../src/story-index.js";
 import { StoryStorage } from "../src/story-storage.js";
 import { ContentStorage } from "../src/content-storage.js";
 import type { StorySummary } from "../src/story-types.js";
-import { TYPES, SCENARIOS, SUBJECTS, TEST_DB_SCHEMA, makeStorySummary } from "./test-data.js";
+import { TYPES, SCENARIOS, SUBJECTS, TEST_DB_SCHEMA, makeStorySummary, makeSimilarVectors } from "./test-data.js";
 
 let testDir: string;
 let storage: ContentStorage;
@@ -197,6 +197,128 @@ describe("StoryIndexManager", () => {
 
     const stories = mgr.getAllStories();
     expect(stories).toHaveLength(2); // Third merged into first
+    mgr.close();
+    db.close();
+  });
+});
+
+// ── Semantic Matching Tests ────────────────────────────────────────
+
+describe("StoryIndexManager semantic matching", () => {
+  it("merges stories via embedding when exact match fails", async () => {
+    const db = openDb("semantic-1");
+    const [vecA, vecB] = makeSimilarVectors(0.95);
+    const mockEmbed = {
+      embed: async (text: string) => {
+        // Return consistent vectors per subject regardless of call order
+        return text.includes("auth") ? vecA : vecB;
+      },
+    };
+
+    const mgr = new StoryIndexManager(db, storyStorage, "semantic-1", undefined, mockEmbed as any, 0.85);
+
+    // Create initial story with "auth-module"
+    await mgr.processSummaries([makeStorySummary()]);
+
+    // Create new story with "authentication" (same type/scenario, different subject)
+    const newSummary = makeStorySummary({
+      content: "Completed authentication system",
+      attributes: {
+        subject: "authentication",
+        type: TYPES.implementation,
+        scenario: SCENARIOS.softwareCoding,
+      },
+      sourceSummary: "summaries/2026-04-21-1.md",
+    });
+
+    await mgr.processSummaries([newSummary]);
+
+    const stories = mgr.getAllStories();
+    expect(stories).toHaveLength(1); // Merged via semantic match
+    expect(stories[0].narrative).toContain("JWT");
+    expect(stories[0].narrative).toContain("authentication system");
+
+    mgr.close();
+    db.close();
+  });
+
+  it("does not merge when similarity is below threshold", async () => {
+    const db = openDb("semantic-2");
+    const [vecA, vecB] = makeSimilarVectors(0.5); // Below threshold
+    const mockEmbed = {
+      embed: async (text: string) => {
+        return text === "auth-module" ? vecA : vecB;
+      },
+    };
+
+    const mgr = new StoryIndexManager(db, storyStorage, "semantic-2", undefined, mockEmbed as any, 0.85);
+
+    await mgr.processSummaries([makeStorySummary()]);
+    await mgr.processSummaries([makeStorySummary({
+      content: "Unrelated work",
+      attributes: {
+        subject: "database-migration",
+        type: TYPES.implementation,
+        scenario: SCENARIOS.softwareCoding,
+      },
+      sourceSummary: "summaries/2026-04-21-1.md",
+    })]);
+
+    const stories = mgr.getAllStories();
+    expect(stories).toHaveLength(2); // Not merged
+
+    mgr.close();
+    db.close();
+  });
+
+  it("falls back to exact match when no embeddingService", async () => {
+    const db = openDb("semantic-3");
+    const mgr = new StoryIndexManager(db, storyStorage, "semantic-3");
+
+    await mgr.processSummaries([makeStorySummary()]);
+    await mgr.processSummaries([makeStorySummary({
+      content: "Different subject",
+      attributes: {
+        subject: "authentication",
+        type: TYPES.implementation,
+        scenario: SCENARIOS.softwareCoding,
+      },
+      sourceSummary: "summaries/2026-04-21-1.md",
+    })]);
+
+    const stories = mgr.getAllStories();
+    expect(stories).toHaveLength(2); // No embedding → no semantic merge
+
+    mgr.close();
+    db.close();
+  });
+
+  it("requires type and scenario to match for semantic merge", async () => {
+    const db = openDb("semantic-4");
+    const [vecA, vecB] = makeSimilarVectors(0.95);
+    const mockEmbed = {
+      embed: async (text: string) => {
+        return text.includes("auth") ? vecA : vecB;
+      },
+    };
+
+    const mgr = new StoryIndexManager(db, storyStorage, "semantic-4", undefined, mockEmbed as any, 0.85);
+
+    await mgr.processSummaries([makeStorySummary()]);
+    // Same subject embedding similarity, but different type
+    await mgr.processSummaries([makeStorySummary({
+      content: "Debugged auth",
+      attributes: {
+        subject: "authentication",
+        type: TYPES.debugging, // Different type!
+        scenario: SCENARIOS.softwareCoding,
+      },
+      sourceSummary: "summaries/2026-04-21-1.md",
+    })]);
+
+    const stories = mgr.getAllStories();
+    expect(stories).toHaveLength(2); // Not merged — type mismatch
+
     mgr.close();
     db.close();
   });

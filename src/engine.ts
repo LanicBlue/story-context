@@ -7,6 +7,8 @@ import { StoryIndexManager } from "./story-index.js";
 import { StoryStorage } from "./story-storage.js";
 import { MessageStore } from "./message-store.js";
 import { runInnerTurn, sampleMessagesText } from "./inner-turn.js";
+import { OllamaEmbedding } from "./embedding.js";
+import type { EmbeddingService } from "./embedding.js";
 import type { StoryDocument, EntityDocument } from "./story-types.js";
 
 // ContextEngine types — openclaw exposes these via the plugin-sdk surface.
@@ -65,11 +67,20 @@ export class SmartContextEngine {
   private readonly storyManagers = new Map<string, StoryIndexManager>();
   private readonly storyStorage: StoryStorage;
   private readonly messageStore: MessageStore;
+  private readonly embeddingService?: EmbeddingService;
 
   constructor(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
     this.config = resolveConfig(config);
     this.summarizer = summarizer;
     this.storage = new ContentStorage(this.config.storageDir || undefined);
+
+    // Build embedding service from same baseUrl as summarizer
+    if (this.config.summaryBaseUrl && this.config.embeddingModel) {
+      this.embeddingService = new OllamaEmbedding(
+        this.config.summaryBaseUrl,
+        this.config.embeddingModel,
+      );
+    }
     this.storyStorage = new StoryStorage(this.storage);
     this.contentProcessor = new ContentProcessor(
       {
@@ -152,7 +163,7 @@ export class SmartContextEngine {
     if (!mgr) {
       const db = this.messageStore.getDb(sessionId);
       const storyStorage = this.compactor.getStoryStorage();
-      mgr = new StoryIndexManager(db, storyStorage, sessionId, this.summarizer);
+      mgr = new StoryIndexManager(db, storyStorage, sessionId, this.summarizer, this.embeddingService, this.config.embeddingThreshold);
       this.storyManagers.set(sessionId, mgr);
     }
     return mgr;

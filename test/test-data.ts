@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS processed_summaries (
   path TEXT PRIMARY KEY
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
+CREATE TABLE IF NOT EXISTS story_embeddings (
+  story_id TEXT NOT NULL,
+  dimension TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  PRIMARY KEY (story_id, dimension)
+);
 `;
 
 // ── Message Factory ──────────────────────────────────────────────
@@ -179,6 +185,44 @@ export function makeStructuralMockSummarizer(): Summarizer {
 // ── Session ID ───────────────────────────────────────────────────
 
 export const SID = "test-session";
+
+// ── Mock Embedding Service ────────────────────────────────────────
+
+export type MockEmbeddingService = {
+  embed: ReturnType<typeof vi.fn<(text: string) => Promise<number[]>>>;
+};
+
+/** Create a mock embedding service that generates deterministic vectors.
+ *  Similar strings get similar vectors; different strings get orthogonal vectors. */
+export function makeMockEmbeddingService(): MockEmbeddingService {
+  return {
+    embed: vi.fn(async (text: string): Promise<number[]> => {
+      // Deterministic: hash text to seed a simple vector
+      const vec = new Array(8).fill(0);
+      for (let i = 0; i < text.length; i++) {
+        vec[i % 8] += text.charCodeAt(i);
+      }
+      // Normalize
+      const norm = Math.sqrt(vec.reduce((s: number, v: number) => s + v * v, 0));
+      return norm > 0 ? vec.map(v => v / norm) : vec;
+    }),
+  };
+}
+
+/** Create a mock embedding that returns a specific vector for all texts. */
+export function makeConstantEmbeddingService(vec: number[]): MockEmbeddingService {
+  return {
+    embed: vi.fn(async () => [...vec]),
+  };
+}
+
+/** Create two embedding vectors with a specific cosine similarity. */
+export function makeSimilarVectors(similarity: number): [number[], number[]] {
+  // a = [1, 0], b = [similarity, sqrt(1 - similarity^2)]
+  const a = [1, 0];
+  const b = [similarity, Math.sqrt(1 - similarity * similarity)];
+  return [a, b];
+}
 
 // ── Integration Test: Data Source ─────────────────────────────────
 

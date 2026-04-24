@@ -8,18 +8,24 @@ import type {
 } from "./story-types.js";
 import { StoryStorage } from "./story-storage.js";
 import type { Summarizer } from "./types.js";
+import type { EmbeddingService } from "./embedding.js";
+import { cosineSimilarity, serializeEmbedding, deserializeEmbedding } from "./embedding.js";
 
 type Dimension = "subject" | "type" | "scenario";
 
 export class StoryIndexManager {
   private db: Database.Database;
   private readonly index: StoryIndex;
+  /** story_id → subject embedding */
+  private readonly embeddings = new Map<string, number[]>();
 
   constructor(
     db: Database.Database,
     private readonly storage: StoryStorage,
     private readonly sessionId: string,
     private readonly summarizer?: Summarizer,
+    private readonly embeddingService?: EmbeddingService,
+    private readonly embeddingThreshold = 0.85,
   ) {
     this.db = db;
     this.index = {
@@ -52,7 +58,7 @@ export class StoryIndexManager {
   /** Process extracted story summaries: match, create/update stories, update entities. */
   async processSummaries(summaries: StorySummary[]): Promise<void> {
     for (const summary of summaries) {
-      const match = this.findMatch(summary);
+      const match = await this.findMatch(summary);
 
       if (match) {
         await this.updateStory(match, summary);
@@ -62,11 +68,16 @@ export class StoryIndexManager {
     }
   }
 
-  /** Find an existing story that matches all three dimensions (normalized). */
-  private findMatch(summary: StorySummary): StoryDocument | undefined {
+  /** Find an existing story that matches all three dimensions.
+   *  1. Exact match on normalized subject/type/scenario
+   *  2. Semantic match on subject (embedding cosine similarity), exact on type/scenario
+   */
+  private async findMatch(summary: StorySummary): Promise<StoryDocument | undefined> {
     const sS = this.normalizeDim(summary.attributes.subject);
     const sT = this.normalizeDim(summary.attributes.type);
     const sSc = this.normalizeDim(summary.attributes.scenario);
+
+    // Level 1: exact match
     for (const doc of this.index.documents.values()) {
       if (
         this.normalizeDim(doc.attributes.subject) === sS &&
@@ -76,6 +87,34 @@ export class StoryIndexManager {
         return doc;
       }
     }
+
+    // Level 2: semantic match on subject, exact on type/scenario
+    if (this.embeddingService) {
+      const queryVec = await this.embeddingService.embed(summary.attributes.subject);
+      let bestDoc: StoryDocument | undefined;
+      let bestScore = 0;
+
+      for (const doc of this.index.documents.values()) {
+        if (
+          this.normalizeDim(doc.attributes.type) !== sT ||
+          this.normalizeDim(doc.attributes.scenario) !== sSc
+        ) continue;
+
+        const storedVec = this.embeddings.get(doc.id);
+        if (!storedVec) continue;
+
+        const score = cosineSimilarity(queryVec, storedVec);
+        if (score > bestScore) {
+          bestScore = score;
+          bestDoc = doc;
+        }
+      }
+
+      if (bestDoc && bestScore >= this.embeddingThreshold) {
+        return bestDoc;
+      }
+    }
+
     return undefined;
   }
 
@@ -107,6 +146,9 @@ export class StoryIndexManager {
     // Persist to in-memory index
     this.index.documents.set(id, doc);
     this.index.processedSummaries.add(summary.sourceSummary);
+
+    // Compute and store subject embedding
+    await this.computeAndStoreEmbedding(id, summary.attributes.subject);
 
     // Persist to SQLite
     this.persistStory(doc);
@@ -310,6 +352,9 @@ export class StoryIndexManager {
     // Ensure entities (fire-and-forget, no await needed for sync persist)
     this.ensureEntitiesSync(attrs, id);
 
+    // Compute and store subject embedding (fire-and-forget)
+    this.computeAndStoreEmbedding(id, attrs.subject).catch(() => {});
+
     return id;
   }
 
@@ -339,10 +384,44 @@ export class StoryIndexManager {
   /** Remove a story (used for rollback). */
   removeStory(storyId: string): void {
     this.index.documents.delete(storyId);
+    this.embeddings.delete(storyId);
     this.db.prepare("DELETE FROM stories WHERE id = ?").run(storyId);
     this.db.prepare("DELETE FROM stories_fts WHERE id = ?").run(storyId);
     this.db.prepare("DELETE FROM story_sources WHERE story_id = ?").run(storyId);
     this.db.prepare("DELETE FROM story_entities WHERE story_id = ?").run(storyId);
+    this.db.prepare("DELETE FROM story_embeddings WHERE story_id = ?").run(storyId);
+  }
+
+  // ── Embedding Helpers ─────────────────────────────────────────────
+
+  private async computeAndStoreEmbedding(storyId: string, subject: string): Promise<void> {
+    if (!this.embeddingService) return;
+    try {
+      const vec = await this.embeddingService.embed(subject);
+      this.embeddings.set(storyId, vec);
+      this.persistEmbedding(storyId, "subject", vec);
+    } catch {
+      // Embedding failure is non-fatal — fall back to exact matching
+    }
+  }
+
+  private persistEmbedding(storyId: string, dimension: string, vec: number[]): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO story_embeddings (story_id, dimension, embedding)
+      VALUES (?, ?, ?)
+    `).run(storyId, dimension, serializeEmbedding(vec));
+  }
+
+  private loadEmbeddingsFromDb(): void {
+    const rows = this.db.prepare("SELECT story_id, dimension, embedding FROM story_embeddings").all() as Array<{
+      story_id: string; dimension: string; embedding: Buffer;
+    }>;
+    for (const r of rows) {
+      if (r.dimension === "subject" && r.embedding.length > 0) {
+        const length = r.embedding.length / 8;
+        this.embeddings.set(r.story_id, deserializeEmbedding(r.embedding, length));
+      }
+    }
   }
 
   /** Get distinct known values for each dimension. */
@@ -450,6 +529,9 @@ export class StoryIndexManager {
     for (const r of psRows) {
       this.index.processedSummaries.add(r.path);
     }
+
+    // Embeddings
+    this.loadEmbeddingsFromDb();
   }
 
   /** No-op: DB lifecycle managed by MessageStore. */

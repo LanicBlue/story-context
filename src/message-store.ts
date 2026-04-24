@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS processed_summaries (
 CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
 `;
 
+const EMBEDDING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS story_embeddings (
+  story_id TEXT NOT NULL,
+  dimension TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  PRIMARY KEY (story_id, dimension)
+);
+`;
+
 const MIGRATIONS = `
 ALTER TABLE stories ADD COLUMN active_until_turn INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE stories ADD COLUMN last_edited_turn INTEGER NOT NULL DEFAULT 0;
@@ -130,6 +139,7 @@ export class MessageStore {
       db = new Database(newPath);
       db.pragma("journal_mode = WAL");
       db.exec(SCHEMA);
+      db.exec(EMBEDDING_SCHEMA);
       // Apply migrations (ignore errors if column already exists)
       for (const line of MIGRATIONS.trim().split(";")) {
         const sql = line.trim();

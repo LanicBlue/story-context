@@ -25,6 +25,8 @@ const DEFAULTS: SmartContextConfig = {
   activeStoryTTL: 40,
   recentMessageCount: 30,
   innerTurnMessageSample: 30,
+  embeddingModel: "nomic-embed-text",
+  embeddingThreshold: 0.85,
   sessionFilter: "main",
 };
 
@@ -58,6 +60,8 @@ export function resolveConfig(
     activeStoryTTL: positiveInt(src.activeStoryTTL, DEFAULTS.activeStoryTTL),
     recentMessageCount: positiveInt(src.recentMessageCount, DEFAULTS.recentMessageCount),
     innerTurnMessageSample: positiveInt(src.innerTurnMessageSample, DEFAULTS.innerTurnMessageSample),
+    embeddingModel: typeof src.embeddingModel === "string" ? src.embeddingModel : DEFAULTS.embeddingModel,
+    embeddingThreshold: typeof src.embeddingThreshold === "number" ? src.embeddingThreshold : DEFAULTS.embeddingThreshold,
     sessionFilter: parseSessionFilter(src.sessionFilter),
   };
 }

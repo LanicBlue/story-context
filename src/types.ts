@@ -79,6 +79,9 @@ export type SmartContextConfig = {
   activeStoryTTL: number;
   recentMessageCount: number;
   innerTurnMessageSample: number;
+  // Embedding
+  embeddingModel: string;
+  embeddingThreshold: number;
   // Session filtering
   sessionFilter: "all" | "main" | string[];
 };
