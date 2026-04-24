@@ -229,6 +229,12 @@ export function makeSimilarVectors(similarity: number): [number[], number[]] {
 /** DB path — change this to switch test data source */
 export const TEST_DB_PATH = join(import.meta.dirname, "..", "data", "lcm.db");
 
+/** JSONL conversation files (OpenClaw session exports). */
+export const JSONL_FILES = [
+  join(import.meta.dirname, "..", "data", "06bc5eef-dc76-45d8-8ad7-af34816fe5f7.jsonl.reset.2026-04-06T20-12-53.300Z"),
+  join(import.meta.dirname, "..", "data", "a4572a02-3a86-446c-b98c-0a0e25cbf4af.jsonl.reset.2026-03-23T23-10-01.829Z"),
+];
+
 /** Output dirs — change these to redirect test output */
 export const TEST_OUTPUT_DIR = join(import.meta.dirname, "..", "data", "test-output");
 export const LLM_TEST_OUTPUT_DIR = join(import.meta.dirname, "..", "data", "llm-test-output");
@@ -340,6 +346,57 @@ export async function loadConversation(convId: number, opts?: { limit?: number; 
   }
 
   return { messages: result, totalTokens, totalCount };
+}
+
+// ── JSONL Loader ──────────────────────────────────────────────────
+
+/** Extract text from a message content array (skip thinking blocks). */
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((p: any) => p.type === "text" && typeof p.text === "string")
+    .map((p: any) => p.text)
+    .join("\n");
+}
+
+/** Load a conversation from a JSONL session file.
+ *  @param fileIndex  Index into JSONL_FILES array (0 or 1)
+ *  @param opts.limit Max messages to return
+ *  @param opts.offset Skip first N messages */
+export function loadJsonlConversation(
+  fileIndex: number,
+  opts?: { limit?: number; offset?: number },
+): LoadedConversation {
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const filePath = JSONL_FILES[fileIndex];
+  const raw = readFileSync(filePath, "utf-8");
+
+  const allMessages: Array<Record<string, unknown>> = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type !== "message") continue;
+      const msg = obj.message as { role: string; content: unknown; timestamp?: number };
+      const role = msg.role as "user" | "assistant" | "toolResult";
+      const text = extractText(msg.content);
+      if (!text) continue;
+
+      allMessages.push({
+        role,
+        content: text,
+        timestamp: msg.timestamp ?? Date.now(),
+      });
+    } catch { /* skip malformed lines */ }
+  }
+
+  const offset = opts?.offset ?? 0;
+  const limit = opts?.limit;
+  const sliced = limit ? allMessages.slice(offset, offset + limit) : allMessages.slice(offset);
+  const totalTokens = sliced.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length / 4 : 0), 0);
+
+  return { messages: sliced, totalTokens: Math.round(totalTokens), totalCount: allMessages.length };
 }
 
 /** Print directory tree for test output inspection. */

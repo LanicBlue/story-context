@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { SmartContextEngine } from "../src/engine.js";
-import { loadConversation, printTree, TEST_OUTPUT_DIR } from "./test-data.js";
+import { loadJsonlConversation, printTree, TEST_OUTPUT_DIR } from "./test-data.js";
 
 describe("SmartContextEngine with lcm.db data", () => {
   // Clean and create output dir before tests
@@ -14,7 +14,7 @@ describe("SmartContextEngine with lcm.db data", () => {
   it(
     "conv 1: full pipeline with output to data/test-output/",
     async () => {
-      const { messages, totalTokens, totalCount } = await loadConversation(1);
+      const { messages, totalTokens, totalCount } = loadJsonlConversation(0);
       console.log(`Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens)`);
 
       const engine = new SmartContextEngine({

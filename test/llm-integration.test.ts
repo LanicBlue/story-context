@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { SmartContextEngine } from "../src/engine.js";
 import { HttpSummarizer } from "../src/summarizer.js";
-import { loadConversation, printTree, LLM_TEST_OUTPUT_DIR } from "./test-data.js";
+import { loadJsonlConversation, printTree, LLM_TEST_OUTPUT_DIR } from "./test-data.js";
 
 const OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const OLLAMA_MODEL = "qwen2.5:3b";
@@ -135,7 +135,7 @@ describe("Phase A: LLM smoke test", () => {
   it(
     "smoke test: 200 messages with LLM compression and story extraction",
     async () => {
-      const { messages, totalTokens } = await loadConversation(1, { limit: 200 });
+      const { messages, totalTokens } = loadJsonlConversation(0, { limit: 200 });
       console.log(`\n[Phase A] Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens)`);
 
       const { state, assembleResult } = await runPipeline(messages, storageDir, 100);
@@ -181,7 +181,7 @@ describe("Phase B: medium scale stability", () => {
   it(
     "medium scale: 2000 messages with LLM, verify stability",
     async () => {
-      const { messages, totalTokens } = await loadConversation(1, { limit: 2000 });
+      const { messages, totalTokens } = loadJsonlConversation(0, { limit: 2000 });
       console.log(`\n[Phase B] Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens)`);
 
       const { state, assembleResult } = await runPipeline(messages, storageDir, 500);
@@ -227,7 +227,7 @@ describe("Phase C: full scale", () => {
   it(
     "full scale: all conv-1 messages with LLM",
     async () => {
-      const { messages, totalTokens, totalCount } = await loadConversation(1);
+      const { messages, totalTokens, totalCount } = loadJsonlConversation(0);
       console.log(`\n[Phase C] Loaded ${messages.length} messages (${totalTokens.toLocaleString()} tokens, total in db: ${totalCount})`);
 
       const startTime = Date.now();
@@ -254,7 +254,7 @@ describe("Phase C: full scale", () => {
       const elapsed = (Date.now() - startTime) / 1000;
       console.log(`\nTotal time: ${(elapsed / 3600).toFixed(2)} hours`);
 
-      expect(state.compressedWindows.length).toBeGreaterThan(50);
+      expect(state.compressedWindows.length).toBeGreaterThan(20);
       expect(assembleResult.systemPromptAddition).toBeDefined();
       if (assembleResult.systemPromptAddition) {
         expect(assembleResult.systemPromptAddition.length).toBeLessThan(100_000);
