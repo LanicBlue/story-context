@@ -1,25 +1,11 @@
-/** Attribute dimensions extracted per story during compression. */
+/** Attribute dimensions for each story. */
 export type StoryAttributes = {
   /** What entity this story is about (project, system, module, concept, person). */
   subject: string;
-  /** Story category (software development, investigation, decision, discussion, etc.). */
+  /** Story category (implementation, debugging, exploration, etc.). */
   type: string;
-  /** Application context/domain (production, tech selection, client engagement, etc.). */
+  /** Application context/domain (software.coding, data.crawling, etc.). */
   scenario: string;
-};
-
-/** A single story extracted from one compressed window. */
-export type StorySummary = {
-  /** Narrative description of what happened. */
-  content: string;
-  /** Extracted attribute values across predefined dimensions. */
-  attributes: StoryAttributes;
-  /** Source summary file, e.g. "summaries/2026-04-21-0.md". */
-  sourceSummary: string;
-  /** Message range [start, end) within the session. */
-  messageRange: [number, number];
-  /** Unix timestamp. */
-  timestamp: number;
 };
 
 /** A persistent story document stored as stories/story-<hash>.md. */
@@ -28,18 +14,16 @@ export type StoryDocument = {
   id: string;
   /** Human-readable title. */
   title: string;
-  /** Attribute values accumulated across all contributing summaries. */
+  /** Attribute values. */
   attributes: StoryAttributes;
-  /** Ordered list of source summary references. */
+  /** Source message ranges that contributed to this story. */
   sources: Array<{
-    /** e.g. "summaries/2026-04-21-0.md" */
-    summaryPath: string;
     messageRange: [number, number];
     timestamp: number;
     snippet: string;
   }>;
-  status: "active" | "paused" | "completed" | "abandoned";
-  /** Evolving narrative, appended as new summaries match this story. */
+  status: "active";
+  /** Evolving narrative, appended as inner turn updates. */
   narrative: string;
   /** Active until this turn number (0 = inactive). Reset on create/update. */
   activeUntilTurn: number;
@@ -49,7 +33,7 @@ export type StoryDocument = {
   lastUpdated: number;
 };
 
-/** An entity document (subject / type / scenario) stored as .md. */
+/** An entity document (subject / type / scenario). */
 export type EntityDocument = {
   dimension: "subject" | "type" | "scenario";
   /** Entity name — also the filename stem. */
@@ -58,11 +42,6 @@ export type EntityDocument = {
   description: string;
   /** IDs of stories that reference this entity. */
   storyIds: string[];
-  /** Links to other entities. */
-  relatedEntities: Array<{
-    dimension: "subject" | "type" | "scenario";
-    name: string;
-  }>;
   createdAt: number;
   lastUpdated: number;
 };
@@ -71,5 +50,4 @@ export type EntityDocument = {
 export type StoryIndex = {
   documents: Map<string, StoryDocument>;
   entities: Map<string, EntityDocument>; // key = "dimension:name"
-  processedSummaries: Set<string>;
 };

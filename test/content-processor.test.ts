@@ -23,7 +23,7 @@ function makeProcessor(
   overrides: {
     largeTextThreshold?: number;
     contentFilters?: ContentFilterRule[];
-    summaryEnabled?: boolean;
+    llmEnabled?: boolean;
   } = {},
   summarizer?: Summarizer,
 ) {
@@ -31,7 +31,7 @@ function makeProcessor(
     {
       largeTextThreshold: overrides.largeTextThreshold ?? 2000,
       contentFilters: overrides.contentFilters ?? [],
-      summaryEnabled: overrides.summaryEnabled ?? false,
+      llmEnabled: overrides.llmEnabled ?? false,
     },
     storage,
     summarizer,
@@ -110,11 +110,10 @@ describe("ContentProcessor", () => {
 
     it("includes AI summary when enabled and summarizer available", async () => {
       const mockSummarizer: Summarizer = {
-        summarize: async () => "Key findings: 3 errors found",
-        rawGenerate: async () => "",
+        rawGenerate: async () => "Key findings: 3 errors found",
       };
       const cp = makeProcessor(
-        { largeTextThreshold: 100, summaryEnabled: true },
+        { largeTextThreshold: 100, llmEnabled: true },
         mockSummarizer,
       );
 
@@ -125,11 +124,10 @@ describe("ContentProcessor", () => {
 
     it("skips AI summary when not enabled even if summarizer exists", async () => {
       const mockSummarizer: Summarizer = {
-        summarize: async () => "summary",
-        rawGenerate: async () => "",
+        rawGenerate: async () => "summary",
       };
       const cp = makeProcessor(
-        { largeTextThreshold: 100, summaryEnabled: false },
+        { largeTextThreshold: 100, llmEnabled: false },
         mockSummarizer,
       );
 
@@ -273,15 +271,6 @@ describe("ContentProcessor", () => {
       expect(result.contextText).toContain("Here is the screenshot:");
       expect(result.contextText).toContain("image stored:");
       expect(result.contextText).toContain("The error is visible above.");
-    });
-  });
-
-  describe("cleanup", () => {
-    it("cleans up session files", async () => {
-      const cp = makeProcessor({ largeTextThreshold: 10 });
-      await cp.processContent("x".repeat(50), "s1");
-      await cp.cleanupSession("s1");
-      await expect(cp.cleanupSession("s1")).resolves.toBeUndefined();
     });
   });
 

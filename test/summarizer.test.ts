@@ -2,43 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   HttpSummarizer,
   RuntimeSummarizer,
-  buildSummaryPrompt,
   extractContentText,
-  SUMMARY_SYSTEM_PROMPT,
 } from "../src/summarizer.js";
-
-describe("buildSummaryPrompt", () => {
-  it("includes target tokens and conversation segment", () => {
-    const prompt = buildSummaryPrompt("some text", 400);
-    expect(prompt).toContain("about 400 tokens");
-    expect(prompt).toContain("<conversation_segment>");
-    expect(prompt).toContain("some text");
-    expect(prompt).toContain("</conversation_segment>");
-  });
-
-  it("includes previous context when provided", () => {
-    const prompt = buildSummaryPrompt("text", 400, "previous summary");
-    expect(prompt).toContain("<previous_context>");
-    expect(prompt).toContain("previous summary");
-    expect(prompt).toContain("</previous_context>");
-  });
-
-  it("omits previous context when not provided", () => {
-    const prompt = buildSummaryPrompt("text", 400);
-    expect(prompt).not.toContain("<previous_context>");
-  });
-
-  it("includes custom instructions when provided", () => {
-    const prompt = buildSummaryPrompt("text", 400, undefined, "Keep all file paths");
-    expect(prompt).toContain("Keep all file paths");
-    expect(prompt).toContain("Operator instructions:");
-  });
-
-  it("shows 'none' for empty custom instructions", () => {
-    const prompt = buildSummaryPrompt("text", 400);
-    expect(prompt).toContain("Operator instructions: (none)");
-  });
-});
 
 describe("extractContentText", () => {
   it("returns string directly", () => {
@@ -86,7 +51,7 @@ describe("HttpSummarizer", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    const result = await summarizer.summarize("some conversation text", 600);
+    const result = await summarizer.rawGenerate("system prompt", "user prompt", 600);
     expect(result).toBe("Summary of the conversation");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -96,7 +61,7 @@ describe("HttpSummarizer", () => {
 
     const body = JSON.parse(opts.body);
     expect(body.model).toBe("qwen2.5");
-    expect(body.max_tokens).toBe(1200);
+    expect(body.max_tokens).toBe(600);
     expect(body.messages[0].role).toBe("system");
     expect(body.messages[1].role).toBe("user");
   });
@@ -117,7 +82,7 @@ describe("HttpSummarizer", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    await authSummarizer.summarize("text", 300);
+    await authSummarizer.rawGenerate("sys", "user", 300);
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers["Authorization"]).toBe("Bearer sk-test-key");
   });
@@ -130,7 +95,7 @@ describe("HttpSummarizer", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    await expect(summarizer.summarize("text", 600)).rejects.toThrow("HTTP 429");
+    await expect(summarizer.rawGenerate("sys", "text", 600)).rejects.toThrow("HTTP 429");
   });
 
   it("throws on empty response", async () => {
@@ -140,7 +105,7 @@ describe("HttpSummarizer", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    await expect(summarizer.summarize("text", 600)).rejects.toThrow("Empty response");
+    await expect(summarizer.rawGenerate("sys", "text", 600)).rejects.toThrow("Empty response");
   });
 
   it("strips trailing slashes from baseUrl", async () => {
@@ -158,7 +123,7 @@ describe("HttpSummarizer", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    await s.summarize("text", 600);
+    await s.rawGenerate("sys", "text", 600);
     const [url] = mockFetch.mock.calls[0];
     expect(url).toBe("http://localhost:11434/v1/chat/completions");
   });
@@ -171,7 +136,7 @@ describe("RuntimeSummarizer", () => {
     });
 
     const summarizer = new RuntimeSummarizer(mockComplete, "claude-sonnet-4");
-    const result = await summarizer.summarize("conversation text", 400);
+    const result = await summarizer.rawGenerate("system prompt", "user prompt", 400);
 
     expect(result).toBe("runtime summary");
     expect(mockComplete).toHaveBeenCalledTimes(1);
@@ -179,7 +144,7 @@ describe("RuntimeSummarizer", () => {
     const [params] = mockComplete.mock.calls[0];
     expect(params.model).toBe("claude-sonnet-4");
     expect(params.maxTokens).toBe(400);
-    expect(params.system).toBe(SUMMARY_SYSTEM_PROMPT);
+    expect(params.system).toBe("system prompt");
     expect(params.messages[0].role).toBe("user");
   });
 
@@ -190,6 +155,6 @@ describe("RuntimeSummarizer", () => {
     });
 
     const summarizer = new RuntimeSummarizer(mockComplete, "test-model");
-    await expect(summarizer.summarize("text", 400)).rejects.toThrow("model unavailable");
+    await expect(summarizer.rawGenerate("sys", "text", 400)).rejects.toThrow("model unavailable");
   });
 });

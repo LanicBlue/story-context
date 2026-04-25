@@ -20,21 +20,20 @@ type PluginApi = {
 
 function createSummarizer(api: PluginApi, rawConfig: Record<string, unknown>): Summarizer | undefined {
   const config = resolveConfig(rawConfig);
-  if (!config.summaryEnabled) return undefined;
+  if (!config.llmEnabled) return undefined;
 
   // Try runtime mode first (use OpenClaw's configured model/provider)
-  if (config.summaryMode === "runtime" && api.complete) {
-    const model = config.summaryModel || "";
-    return new RuntimeSummarizer(api.complete, model, config.summaryCustomInstructions);
+  if (config.llmMode === "runtime" && api.complete) {
+    const model = config.llmModel || "";
+    return new RuntimeSummarizer(api.complete, model);
   }
 
   // Fallback to HTTP mode (Ollama, LM Studio, etc.)
   return new HttpSummarizer({
-    baseUrl: config.summaryBaseUrl,
-    model: config.summaryModel || "qwen2.5",
-    apiKey: config.summaryApiKey,
-    timeoutMs: config.summaryTimeoutMs,
-    customInstructions: config.summaryCustomInstructions,
+    baseUrl: config.llmBaseUrl,
+    model: config.llmModel || "qwen2.5",
+    apiKey: config.llmApiKey,
+    timeoutMs: config.llmTimeoutMs,
   });
 }
 
@@ -42,7 +41,7 @@ const smartContextPlugin = {
   id: "story-context",
   name: "Smart Context Engine",
   description:
-    "Dedup-aware sliding window context engine with LLM summarization for OpenClaw",
+    "Story-driven context engine with budget-aware message assembly for OpenClaw",
 
   configSchema: {
     parse(value: unknown) {

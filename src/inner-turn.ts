@@ -1,7 +1,13 @@
 import type { Summarizer } from "./types.js";
 import type { StoryDocument, StoryAttributes } from "./story-types.js";
 import type { StoryIndexManager } from "./story-index.js";
-import { extractText, extractRole } from "./compactor.js";
+import { extractText } from "./engine.js";
+
+// ── Local helpers ────────────────────────────────────────────────
+
+function extractRole(msg: unknown): string {
+  return (msg as { role?: string }).role ?? "unknown";
+}
 
 // ── Prompt Constants ────────────────────────────────────────────
 

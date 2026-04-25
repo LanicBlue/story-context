@@ -27,7 +27,7 @@ describe("SmartContextEngine", () => {
   it("reports correct engine info", () => {
     const engine = makeEngine();
     expect(engine.info.id).toBe("story-context");
-    expect(engine.info.version).toBe("2.0.0");
+    expect(engine.info.version).toBe("3.0.0");
     expect(engine.info.ownsCompaction).toBe(true);
   });
 
@@ -55,9 +55,9 @@ describe("SmartContextEngine", () => {
     const engine = makeEngine();
     await engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
     const state = engine._getState(SID)!;
-    expect(state.activeEnd).toBe(0);
-    expect(state.compressedWindows).toEqual([]);
-    expect(state.focusedStoryId).toBeNull();
+    expect(state.activeStories).toEqual([]);
+    expect(state.adjustedMessageWindowSize).toBeUndefined();
+    expect(state.adjustedMaxActiveStories).toBeUndefined();
   });
 
   it("isolates different sessions", async () => {
@@ -73,7 +73,7 @@ describe("SmartContextEngine", () => {
     await eng.ingest({ sessionId: "dispose-test", message: makeMessage("user", "hello") });
     await eng.dispose();
     expect(eng._getState("dispose-test")).toBeUndefined();
-    engine = undefined; // already disposed
+    engine = undefined;
   });
 });
 
@@ -143,27 +143,35 @@ describe("compact", () => {
     expect(result.reason).toBe("within budget");
   });
 
-  it("compresses old messages into a window", async () => {
-    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 });
+  it("adjusts messageWindowSize and maxActiveStories when over budget", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125 });
     await fillSession(engine, SID, 20, 50);
     const result = await engine.compact({ sessionId: SID, sessionFile: "" });
     expect(result.compacted).toBe(true);
-    expect(result.result!.tokensAfter!).toBeLessThan(result.result!.tokensBefore);
+    expect(result.result!.tokensBefore).toBeGreaterThan(0);
     const state = engine._getState(SID)!;
-    expect(state.compressedWindows.length).toBeGreaterThan(0);
-    expect(state.activeEnd).toBeGreaterThan(0);
+    expect(state.adjustedMessageWindowSize).toBeDefined();
+    expect(state.adjustedMessageWindowSize!).toBeLessThan(30);
+    expect(state.adjustedMaxActiveStories).toBeDefined();
+    expect(state.adjustedMaxActiveStories!).toBeLessThan(13);
   });
 
-  it("uses structural summary (no LLM in compact)", async () => {
-    const mock = makeMockSummarizer([]);
-    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 }, mock);
+  it("resets adjustments when back within budget", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125 });
     await fillSession(engine, SID, 20, 50);
     await engine.compact({ sessionId: SID, sessionFile: "" });
-    expect(mock.rawGenerate).not.toHaveBeenCalled();
+    const state = engine._getState(SID)!;
+    expect(state.adjustedMessageWindowSize).toBeDefined();
+
+    // Re-compact with higher budget (simulating messages being smaller now)
+    const result = await engine.compact({ sessionId: SID, sessionFile: "", tokenBudget: 12_500 });
+    expect(result.compacted).toBe(false);
+    expect(engine._getState(SID)!.adjustedMessageWindowSize).toBeUndefined();
+    expect(engine._getState(SID)!.adjustedMaxActiveStories).toBeUndefined();
   });
 
   it("handles force compact", async () => {
-    const engine = makeEngine({ maxHistoryTokens: 12_500, compactCoreTokens: 75 });
+    const engine = makeEngine({ maxHistoryTokens: 12_500 });
     await fillSession(engine, SID, 10);
     const result = await engine.compact({ sessionId: SID, sessionFile: "", force: true });
     expect(result.compacted).toBe(true);
@@ -171,16 +179,17 @@ describe("compact", () => {
 });
 
 describe("assemble", () => {
-  it("returns messages within budget", async () => {
-    const engine = makeEngine({ maxHistoryTokens: 125 });
-    await engine.ingest({ sessionId: SID, message: makeMessage("user", "x".repeat(400)) });
-    await engine.ingest({ sessionId: SID, message: makeMessage("assistant", "y".repeat(400)) });
+  it("returns messages within window", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 12_500, messageWindowSize: 2 });
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "msg1") });
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "msg2") });
+    await engine.ingest({ sessionId: SID, message: makeMessage("user", "msg3") });
     const result = await engine.assemble({ sessionId: SID, messages: [] });
-    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.messages.length).toBe(2);
   });
 
   it("deduplicates old read_file results", async () => {
-    const engine = makeEngine({ maxHistoryTokens: 12_500, recentWindowSize: 2 });
+    const engine = makeEngine({ maxHistoryTokens: 12_500, messageWindowSize: 30 });
     await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "first read", { path: "x.ts" }) });
     await engine.ingest({ sessionId: SID, message: makeToolResult("read_file", "second read", { path: "x.ts" }) });
     await engine.ingest({ sessionId: SID, message: makeMessage("user", "recent q") });
@@ -189,17 +198,17 @@ describe("assemble", () => {
     expect(result.messages.length).toBe(3);
   });
 
-  it("includes summary context after compaction", async () => {
-    const engine = makeEngine({ maxHistoryTokens: 125, compactCoreTokens: 75, compactOverlapTokens: 12 });
-    for (let i = 0; i < 10; i++) {
+  it("uses adjusted window size from compact", async () => {
+    const engine = makeEngine({ maxHistoryTokens: 125, messageWindowSize: 30 });
+    for (let i = 0; i < 20; i++) {
       await engine.ingest({ sessionId: SID, message: makeMessage("user", `Message ${i}: ${"x".repeat(200)}`) });
     }
     await engine.compact({ sessionId: SID, sessionFile: "" });
-    const result = await engine.assemble({ sessionId: SID, messages: [] });
     const state = engine._getState(SID)!;
-    if (state.compressedWindows.length > 0) {
-      expect(result.systemPromptAddition).toBeDefined();
-    }
+    expect(state.adjustedMessageWindowSize).toBeDefined();
+    expect(state.adjustedMessageWindowSize!).toBeLessThan(30);
+    const result = await engine.assemble({ sessionId: SID, messages: [] });
+    expect(result.messages.length).toBeLessThanOrEqual(state.adjustedMessageWindowSize!);
   });
 });
 
@@ -232,22 +241,5 @@ describe("session filtering", () => {
     const engine = makeEngine({ sessionFilter: ["agent:ops:.*"] });
     await engine.ingest({ sessionId: "main", sessionKey: "agent:main:main", message: makeMessage("user", "main task") });
     expect(engine._getState("main")).toBeUndefined();
-  });
-});
-
-describe("focus stories", () => {
-  it("focusStory sets focusedStoryId", () => {
-    const engine = makeEngine();
-    engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
-    engine.focusStory(SID, "story-abc123");
-    expect(engine._getState(SID)!.focusedStoryId).toBe("story-abc123");
-  });
-
-  it("unfocusStory clears focusedStoryId", () => {
-    const engine = makeEngine();
-    engine.ingest({ sessionId: SID, message: makeMessage("user", "test") });
-    engine.focusStory(SID, "story-abc123");
-    engine.unfocusStory(SID);
-    expect(engine._getState(SID)!.focusedStoryId).toBeNull();
   });
 });

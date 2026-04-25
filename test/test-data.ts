@@ -1,14 +1,14 @@
 /**
  * Shared test constants and factory functions.
- * Change dimension values here to propagate across all test files.
  */
 
 import { vi } from "vitest";
 import { join } from "node:path";
-import type { StoryDocument, StorySummary } from "../src/story-types.js";
+import { readFileSync, readdirSync } from "node:fs";
+import type { StoryDocument } from "../src/story-types.js";
 import type { Summarizer } from "../src/types.js";
 
-// ── Dimension Values (single source of truth) ────────────────────
+// ── Dimension Values ──────────────────────────────────────────────
 
 export const TYPES = {
   implementation: "implementation",
@@ -38,15 +38,13 @@ export const SCENARIOS = {
   general: "general",
 } as const;
 
-// ── Subject values ───────────────────────────────────────────────
-
 export const SUBJECTS = {
   opinionAnalysis: "opinion-analysis",
   authModule: "auth-module",
   crawlerPipeline: "crawler-pipeline",
 } as const;
 
-// ── DB Schema (for tests that create their own DB) ────────────────
+// ── DB Schema ────────────────────────────────────────────────────
 
 export const TEST_DB_SCHEMA = `
 CREATE TABLE IF NOT EXISTS stories (
@@ -64,7 +62,6 @@ CREATE TABLE IF NOT EXISTS stories (
 );
 CREATE TABLE IF NOT EXISTS story_sources (
   story_id TEXT NOT NULL,
-  summary_path TEXT NOT NULL,
   msg_start INTEGER NOT NULL,
   msg_end INTEGER NOT NULL,
   timestamp INTEGER NOT NULL,
@@ -84,16 +81,7 @@ CREATE TABLE IF NOT EXISTS story_entities (
   entity_name TEXT NOT NULL,
   PRIMARY KEY (story_id, dimension)
 );
-CREATE TABLE IF NOT EXISTS processed_summaries (
-  path TEXT PRIMARY KEY
-);
 CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(id, title, subject, type, scenario, narrative);
-CREATE TABLE IF NOT EXISTS story_embeddings (
-  story_id TEXT NOT NULL,
-  dimension TEXT NOT NULL,
-  embedding BLOB NOT NULL,
-  PRIMARY KEY (story_id, dimension)
-);
 `;
 
 // ── Message Factory ──────────────────────────────────────────────
@@ -139,27 +127,11 @@ export function makeStoryDoc(overrides: Partial<StoryDocument> = {}): StoryDocum
   };
 }
 
-export function makeStorySummary(overrides: Partial<StorySummary> = {}): StorySummary {
-  return {
-    content: "Built auth module with JWT support.",
-    attributes: {
-      subject: SUBJECTS.authModule,
-      type: TYPES.implementation,
-      scenario: SCENARIOS.softwareCoding,
-    },
-    sourceSummary: "summaries/2026-04-21-0.md",
-    messageRange: [0, 5],
-    timestamp: Date.now(),
-    ...overrides,
-  };
-}
-
 // ── Mock Summarizer Factory ──────────────────────────────────────
 
 export function makeMockSummarizer(responses: string[]): Summarizer {
   let callIdx = 0;
   return {
-    summarize: vi.fn().mockResolvedValue(""),
     rawGenerate: vi.fn(async () => {
       const resp = responses[callIdx] ?? '{"actions":[]}';
       callIdx++;
@@ -170,15 +142,7 @@ export function makeMockSummarizer(responses: string[]): Summarizer {
 
 export function makeFailingMockSummarizer(): Summarizer {
   return {
-    summarize: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
     rawGenerate: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
-  };
-}
-
-export function makeStructuralMockSummarizer(): Summarizer {
-  return {
-    summarize: vi.fn().mockResolvedValue("# Compressed Summary\n## Task Intent\n- Test task\n## Conclusion\n- Done"),
-    rawGenerate: vi.fn().mockResolvedValue("[]"),
   };
 }
 
@@ -186,56 +150,15 @@ export function makeStructuralMockSummarizer(): Summarizer {
 
 export const SID = "test-session";
 
-// ── Mock Embedding Service ────────────────────────────────────────
-
-export type MockEmbeddingService = {
-  embed: ReturnType<typeof vi.fn<(text: string) => Promise<number[]>>>;
-};
-
-/** Create a mock embedding service that generates deterministic vectors.
- *  Similar strings get similar vectors; different strings get orthogonal vectors. */
-export function makeMockEmbeddingService(): MockEmbeddingService {
-  return {
-    embed: vi.fn(async (text: string): Promise<number[]> => {
-      // Deterministic: hash text to seed a simple vector
-      const vec = new Array(8).fill(0);
-      for (let i = 0; i < text.length; i++) {
-        vec[i % 8] += text.charCodeAt(i);
-      }
-      // Normalize
-      const norm = Math.sqrt(vec.reduce((s: number, v: number) => s + v * v, 0));
-      return norm > 0 ? vec.map(v => v / norm) : vec;
-    }),
-  };
-}
-
-/** Create a mock embedding that returns a specific vector for all texts. */
-export function makeConstantEmbeddingService(vec: number[]): MockEmbeddingService {
-  return {
-    embed: vi.fn(async () => [...vec]),
-  };
-}
-
-/** Create two embedding vectors with a specific cosine similarity. */
-export function makeSimilarVectors(similarity: number): [number[], number[]] {
-  // a = [1, 0], b = [similarity, sqrt(1 - similarity^2)]
-  const a = [1, 0];
-  const b = [similarity, Math.sqrt(1 - similarity * similarity)];
-  return [a, b];
-}
-
 // ── Integration Test: Data Source ─────────────────────────────────
 
-/** DB path — change this to switch test data source */
 export const TEST_DB_PATH = join(import.meta.dirname, "..", "data", "lcm.db");
 
-/** JSONL conversation files (OpenClaw session exports). */
 export const JSONL_FILES = [
   join(import.meta.dirname, "..", "data", "06bc5eef-dc76-45d8-8ad7-af34816fe5f7.jsonl.reset.2026-04-06T20-12-53.300Z"),
   join(import.meta.dirname, "..", "data", "a4572a02-3a86-446c-b98c-0a0e25cbf4af.jsonl.reset.2026-03-23T23-10-01.829Z"),
 ];
 
-/** Output dirs — change these to redirect test output */
 export const TEST_OUTPUT_DIR = join(import.meta.dirname, "..", "data", "test-output");
 export const LLM_TEST_OUTPUT_DIR = join(import.meta.dirname, "..", "data", "llm-test-output");
 
@@ -245,7 +168,7 @@ export type LoadedConversation = {
   totalCount: number;
 };
 
-/** Load a conversation from SQLite DB and map to engine message format. */
+/** Load a conversation from SQLite DB. */
 export async function loadConversation(convId: number, opts?: { limit?: number; offset?: number }): Promise<LoadedConversation> {
   const { default: Database } = await import("better-sqlite3");
   const db = new Database(TEST_DB_PATH, { readonly: true });
@@ -348,9 +271,8 @@ export async function loadConversation(convId: number, opts?: { limit?: number; 
   return { messages: result, totalTokens, totalCount };
 }
 
-// ── JSONL Loader (from smoke-test.mts) ────────────────────────────
+// ── JSONL Loader ─────────────────────────────────────────────────
 
-/** Extract text from content blocks (skip thinking). */
 function jsonlExtractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -385,16 +307,10 @@ function normalizeContent(content: unknown): ContentBlock[] {
   });
 }
 
-/** Load a conversation from a JSONL session file.
- *  Handles user/assistant/toolResult with toolCall separation.
- *  @param fileIndex  Index into JSONL_FILES array (0 or 1)
- *  @param opts.limit Max messages to return
- *  @param opts.offset Skip first N messages */
 export function loadJsonlConversation(
   fileIndex: number,
   opts?: { limit?: number; offset?: number },
 ): LoadedConversation {
-  const { readFileSync } = require("node:fs") as typeof import("node:fs");
   const filePath = JSONL_FILES[fileIndex];
   const raw = readFileSync(filePath, "utf-8");
 
@@ -445,9 +361,7 @@ export function loadJsonlConversation(
   return { messages: sliced, totalTokens: Math.round(totalTokens), totalCount: allMessages.length };
 }
 
-/** Print directory tree for test output inspection. */
 export function printTree(dir: string, prefix = "", depth = 0): void {
-  const { readdirSync } = require("node:fs") as typeof import("node:fs");
   if (depth > 3) return;
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries.slice(0, 30)) {

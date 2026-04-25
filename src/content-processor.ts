@@ -11,7 +11,7 @@ type InternalBlock = TextBlock & { raw?: unknown };
 export type ContentProcessorConfig = {
   largeTextThreshold: number;
   contentFilters: ContentFilterRule[];
-  summaryEnabled: boolean;
+  llmEnabled: boolean;
 };
 
 export type ProcessedContent = {
@@ -74,10 +74,6 @@ export class ContentProcessor {
     }
 
     return { contextText: parts.join("\n\n"), dropMessage: false };
-  }
-
-  async cleanupSession(sessionId: string): Promise<void> {
-    await this.storage.cleanupSession(sessionId);
   }
 
   // ── Internal ────────────────────────────────────────────────────
@@ -177,9 +173,13 @@ export class ContentProcessor {
       `</persisted-output>`,
     ];
 
-    if (this.config.summaryEnabled && this.summarizer) {
+    if (this.config.llmEnabled && this.summarizer) {
       try {
-        const summary = await this.summarizer.summarize(text, 300);
+        const summary = await this.summarizer.rawGenerate(
+          "Summarize the following content concisely.",
+          text,
+          300,
+        );
         if (summary) {
           parts.splice(1, 0, ``, `--- AI Summary ---`, summary);
         }

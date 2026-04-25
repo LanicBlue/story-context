@@ -94,10 +94,3 @@ The `normalizeDimensionValue()` function splits on commas (`,`, `，`, `、`) an
 "software.coding，data.crawling" → "software.coding"
 "  debugging  " → "debugging"
 ```
-
-## Structural Fallback (story-extractor.ts)
-
-When inner turn is not yet available (no summarizer), `extractStoriesStructural()` provides a no-LLM fallback:
-- Segments messages by user message boundaries with no file overlap
-- Infers type from tool usage (write_file → implementation, shell error → debugging)
-- Infers scenario from file paths (test files → software.testing, etc.)
