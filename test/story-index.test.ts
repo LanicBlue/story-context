@@ -43,8 +43,8 @@ describe("StoryIndexManager", () => {
 
       const id = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Fixed a bug in the auth module.",
       }, 1, 40);
 
@@ -66,8 +66,8 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Built auth module.",
       }, 1, 40);
 
@@ -76,10 +76,10 @@ describe("StoryIndexManager", () => {
       expect(subjectEntity!.name).toBe(SUBJECTS.authModule);
       expect(subjectEntity!.storyIds.length).toBeGreaterThan(0);
 
-      const typeEntity = mgr.getEntity("type", TYPES.implementation);
+      const typeEntity = mgr.getEntity("type", TYPES.project);
       expect(typeEntity).toBeDefined();
 
-      const scenarioEntity = mgr.getEntity("scenario", SCENARIOS.softwareCoding);
+      const scenarioEntity = mgr.getEntity("scenario", SCENARIOS.bugFix);
       expect(scenarioEntity).toBeDefined();
 
       mgr.close();
@@ -92,15 +92,15 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Fixed auth bug.",
       }, 1, 40);
 
       mgr.createStoryDirect({
         subject: SUBJECTS.crawlerPipeline,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.dataCrawling,
+        type: TYPES.project,
+        scenario: SCENARIOS.featureDevelopment,
         content: "Built crawler pipeline.",
       }, 1, 40);
 
@@ -117,15 +117,15 @@ describe("StoryIndexManager", () => {
 
       const id1 = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "First creation.",
       }, 1, 40);
 
       const id2 = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Second creation (replaces first).",
       }, 2, 40);
 
@@ -147,8 +147,8 @@ describe("StoryIndexManager", () => {
 
       const id = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Initial narrative.",
       }, 1, 40);
 
@@ -170,8 +170,8 @@ describe("StoryIndexManager", () => {
 
       const id = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Old content.",
       }, 1, 40);
 
@@ -205,8 +205,8 @@ describe("StoryIndexManager", () => {
 
       const id = mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Built auth.",
       }, 1, 40);
 
@@ -226,8 +226,8 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Active story.",
       }, 10, 40);
 
@@ -247,8 +247,8 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Expiring story.",
       }, 10, 20);
 
@@ -270,8 +270,8 @@ describe("StoryIndexManager", () => {
       for (let i = 0; i < 5; i++) {
         mgr.createStoryDirect({
           subject: `project-${i}`,
-          type: TYPES.implementation,
-          scenario: SCENARIOS.softwareCoding,
+          type: TYPES.project,
+          scenario: SCENARIOS.bugFix,
           content: `Story ${i}.`,
         }, i + 1, 100);
       }
@@ -296,15 +296,15 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: "a",
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Story A.",
       }, 1, 100);
 
       mgr.createStoryDirect({
         subject: "b",
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Story B.",
       }, 5, 100);
 
@@ -327,8 +327,8 @@ describe("StoryIndexManager", () => {
       const mgr1 = new StoryIndexManager(db, storyStorage, sessionId);
       const id = mgr1.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Built auth module.",
       }, 1, 40);
       mgr1.updateStoryContentDirect(id, "Also added JWT.", true, 2, 40);
@@ -353,16 +353,16 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Built auth.",
       }, 1, 40);
 
       mgr.createStoryDirect({
         subject: SUBJECTS.crawlerPipeline,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.dataCrawling,
-        content: "Fixed crawler.",
+        type: TYPES.tool,
+        scenario: SCENARIOS.featureDevelopment,
+        content: "Built crawler.",
       }, 2, 40);
 
       const dims = mgr.getKnownDimensions();
@@ -382,16 +382,16 @@ describe("StoryIndexManager", () => {
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.implementation,
-        scenario: SCENARIOS.softwareCoding,
+        type: TYPES.project,
+        scenario: SCENARIOS.bugFix,
         content: "Built auth.",
       }, 1, 40);
 
       mgr.createStoryDirect({
         subject: SUBJECTS.authModule,
-        type: TYPES.debugging,
-        scenario: SCENARIOS.softwareCoding,
-        content: "Fixed auth bug.",
+        type: TYPES.project,
+        scenario: SCENARIOS.refactoring,
+        content: "Refactored auth.",
       }, 2, 40);
 
       const entity = mgr.getEntity("subject", SUBJECTS.authModule);

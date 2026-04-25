@@ -1,10 +1,10 @@
 /** Attribute dimensions for each story. */
 export type StoryAttributes = {
-  /** What entity this story is about (project, system, module, concept, person). */
+  /** The subject entity (person, project, device, book, etc.). */
   subject: string;
-  /** Story category (implementation, debugging, exploration, etc.). */
+  /** Subject type: person, software-project, book, event, device, workflow, tool, topic, organization, dataset. */
   type: string;
-  /** Application context/domain (software.coding, data.crawling, etc.). */
+  /** What happened or what was done (free-form description). */
   scenario: string;
 };
 

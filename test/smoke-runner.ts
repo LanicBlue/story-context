@@ -8,8 +8,8 @@ import { SmartContextEngine } from "../src/engine.js";
 import { HttpSummarizer } from "../src/summarizer.js";
 import { loadJsonlConversation, printTree, TEST_OUTPUT_DIR } from "./test-data.js";
 
-const OLLAMA_BASE_URL = "http://localhost:11435/v1";
-const OLLAMA_MODEL = "qwen3:14b";
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11435/v1";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:14b";
 
 async function ollamaAvailable(): Promise<boolean> {
   try {
@@ -60,6 +60,15 @@ async function main() {
       const s = engine._getState(sessionId);
       if (!s?.innerTurnRunning) break;
       await new Promise(r => setTimeout(r, 1000));
+    }
+
+    const innerResult = engine._getLastInnerTurnResult();
+    if (innerResult) {
+      console.log(
+        `  [InnerTurn] success=${innerResult.success}, ` +
+        `created=${innerResult.createdCount}, updated=${innerResult.updatedCount}` +
+        (innerResult.error ? `, error=${innerResult.error}` : ""),
+      );
     }
 
     const cr = await engine.compact({ sessionId, sessionFile: "" });

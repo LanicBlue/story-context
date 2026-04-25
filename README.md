@@ -8,9 +8,9 @@ A story-driven context engine with budget-aware message assembly for [OpenClaw](
 
 | Dimension | Purpose | Examples |
 |-----------|---------|----------|
-| **subject** | What entity the agent works on | auth-module, crawler-pipeline, deployment |
-| **type** | What action the agent takes | implementation, debugging, exploration, analysis |
-| **scenario** | What domain the work belongs to | software.coding, data.crawling, system.ops, general |
+| **subject** | Concrete entity name (reuse existing) | auth-module, crawler-pipeline, server-03 |
+| **type** | What kind of entity (preset + existing) | person, project, tool, device, environment, concept |
+| **scenario** | Action name (preset + existing) | bug-fix, deployment, architecture-design, debugging |
 
 **Inner turn** uses an LLM (B->A architecture) to create, update, or skip stories based on recent conversation history. InnerTurnB outputs batch actions; on failure, InnerTurnA generates filter rules and retries.
 

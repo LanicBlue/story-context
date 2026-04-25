@@ -11,38 +11,52 @@ import type { Summarizer } from "../src/types.js";
 // ── Dimension Values ──────────────────────────────────────────────
 
 export const TYPES = {
-  implementation: "implementation",
-  debugging: "debugging",
-  exploration: "exploration",
-  assistance: "assistance",
-  analysis: "analysis",
-  testing: "testing",
-  design: "design",
+  person: "person",
+  project: "project",
+  tool: "tool",
+  device: "device",
+  document: "document",
+  dataset: "dataset",
+  event: "event",
+  workflow: "workflow",
+  organization: "organization",
+  concept: "concept",
+  environment: "environment",
+  place: "place",
 } as const;
 
 export const SCENARIOS = {
-  softwareCoding: "software.coding",
-  softwareTesting: "software.testing",
-  softwareDevops: "software.devops",
-  softwareArchitecture: "software.architecture",
-  dataCrawling: "data.crawling",
-  dataEngineering: "data.engineering",
-  dataAnalytics: "data.analytics",
-  systemOps: "system.ops",
-  systemAutomation: "system.automation",
-  contentWriting: "content.writing",
-  contentDesign: "content.design",
-  contentMedia: "content.media",
-  mediaPublicOpinion: "media.public-opinion",
-  researchKnowledge: "research.knowledge",
-  general: "general",
+  bugFix: "bug-fix",
+  featureDevelopment: "feature-development",
+  deployment: "deployment",
+  codeReview: "code-review",
+  architectureDesign: "architecture-design",
+  debugging: "debugging",
+  investigation: "investigation",
+  discussion: "discussion",
+  refactoring: "refactoring",
+  configuration: "configuration",
+  testing: "testing",
+  optimization: "optimization",
 } as const;
 
 export const SUBJECTS = {
-  opinionAnalysis: "opinion-analysis",
   authModule: "auth-module",
   crawlerPipeline: "crawler-pipeline",
+  monitoringSystem: "monitoring-system",
 } as const;
+
+export const TYPE_PRESETS: readonly string[] = [
+  "person", "project", "tool", "device", "document",
+  "dataset", "event", "workflow", "organization", "concept",
+  "environment", "place",
+];
+
+export const SCENARIO_PRESETS: readonly string[] = [
+  "bug-fix", "feature-development", "deployment", "code-review",
+  "architecture-design", "debugging", "investigation", "discussion",
+  "refactoring", "configuration", "testing", "optimization",
+];
 
 // ── DB Schema ────────────────────────────────────────────────────
 
@@ -110,11 +124,11 @@ export function makeToolResult(
 export function makeStoryDoc(overrides: Partial<StoryDocument> = {}): StoryDocument {
   return {
     id: "story-test1234",
-    title: `${SUBJECTS.authModule} — ${TYPES.debugging}`,
+    title: `${SUBJECTS.authModule} — ${TYPES.project}`,
     attributes: {
       subject: SUBJECTS.authModule,
-      type: TYPES.debugging,
-      scenario: SCENARIOS.softwareCoding,
+      type: TYPES.project,
+      scenario: SCENARIOS.bugFix,
     },
     sources: [],
     status: "active",

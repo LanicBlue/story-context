@@ -60,6 +60,7 @@ export class SmartContextEngine {
   private readonly storyManagers = new Map<string, StoryIndexManager>();
   private readonly storyStorage: StoryStorage;
   private readonly messageStore: MessageStore;
+  private lastInnerTurnResult?: { success: boolean; createdCount: number; updatedCount: number; error?: string };
 
   constructor(config: Record<string, unknown> = {}, summarizer?: Summarizer) {
     this.config = resolveConfig(config);
@@ -291,7 +292,7 @@ export class SmartContextEngine {
     if (!s) return;
     const storyMgr = this.getStoryManager(sessionId);
 
-    await runInnerTurn({
+    const result = await runInnerTurn({
       summarizer: this.summarizer!,
       storyManager: storyMgr,
       currentTurn: s.currentTurn,
@@ -302,6 +303,7 @@ export class SmartContextEngine {
       applyFilterRules: () => {},
     });
 
+    this.lastInnerTurnResult = result;
     s.activeStories = storyMgr.getActiveStoriesByTurn(s.currentTurn).map(e => e.id);
     this.messageStore.saveState(sessionId, s);
   }
@@ -516,6 +518,13 @@ export class SmartContextEngine {
   /** @internal Exposed for testing only. */
   _getState(sessionId: string): SessionState | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  /** @internal Last inner turn result for logging. */
+  _getLastInnerTurnResult() {
+    const r = this.lastInnerTurnResult;
+    this.lastInnerTurnResult = undefined;
+    return r;
   }
 }
 

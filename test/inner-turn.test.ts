@@ -68,7 +68,7 @@ function makeDeps(overrides: Partial<InnerTurnDeps> = {}): InnerTurnDeps {
 describe("InnerTurnB", () => {
   it("creates a new story when B outputs action=create", async () => {
     const summarizer = makeMockSummarizer([
-      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed token expiry bug." } }] }),
+      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.project, scenario: SCENARIOS.bugFix, content: "Fixed token expiry bug." } }] }),
     ]);
     const storyManager = makeMockStoryManager();
     const deps = makeDeps({ summarizer, storyManager });
@@ -83,8 +83,8 @@ describe("InnerTurnB", () => {
   it("creates multiple stories with batch output", async () => {
     const summarizer = makeMockSummarizer([
       JSON.stringify({ actions: [
-        { action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed auth bug." } },
-        { action: "create", story: { subject: SUBJECTS.crawlerPipeline, type: TYPES.implementation, scenario: SCENARIOS.softwareCoding, content: "Built crawler pipeline." } },
+        { action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.project, scenario: SCENARIOS.bugFix, content: "Fixed auth bug." } },
+        { action: "create", story: { subject: SUBJECTS.crawlerPipeline, type: TYPES.project, scenario: SCENARIOS.featureDevelopment, content: "Built crawler pipeline." } },
       ] }),
     ]);
     const storyManager = makeMockStoryManager();
@@ -130,7 +130,7 @@ describe("InnerTurnB", () => {
   it("rolls back all operations when one fails (all-or-nothing)", async () => {
     const summarizer = makeMockSummarizer([
       JSON.stringify({ actions: [
-        { action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed auth." } },
+        { action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.project, scenario: SCENARIOS.bugFix, content: "Fixed auth." } },
         { action: "update", targetStoryId: "nonexistent", updatedContent: "Update", append: true },
       ] }),
     ]);
@@ -152,7 +152,7 @@ describe("InnerTurnA (failure recovery)", () => {
     const summarizer = makeMockSummarizer([
       "not valid json",
       JSON.stringify({ rules: [{ match: "contains", pattern: "npm warn", granularity: "message" }], reason: "Filter npm warnings" }),
-      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed auth." } }] }),
+      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.project, scenario: SCENARIOS.bugFix, content: "Fixed auth." } }] }),
     ]);
     const storyManager = makeMockStoryManager();
     const deps = makeDeps({ summarizer, storyManager });
@@ -202,7 +202,7 @@ describe("InnerTurnA (failure recovery)", () => {
 describe("Active Story lifecycle", () => {
   it("sets active TTL on create", async () => {
     const summarizer = makeMockSummarizer([
-      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.debugging, scenario: SCENARIOS.softwareCoding, content: "Fixed." } }] }),
+      JSON.stringify({ actions: [{ action: "create", story: { subject: SUBJECTS.authModule, type: TYPES.project, scenario: SCENARIOS.bugFix, content: "Fixed." } }] }),
     ]);
     const storyManager = makeMockStoryManager();
     const deps = makeDeps({ summarizer, storyManager, currentTurn: 60, activeStoryTTL: 40 });
@@ -234,7 +234,7 @@ describe("Active Story lifecycle", () => {
 
   it("calls evictOverflow after batch execution", async () => {
     const summarizer = makeMockSummarizer([
-      JSON.stringify({ actions: [{ action: "create", story: { subject: "a", type: TYPES.implementation, scenario: SCENARIOS.softwareCoding, content: "C1" } }] }),
+      JSON.stringify({ actions: [{ action: "create", story: { subject: "a", type: TYPES.project, scenario: SCENARIOS.featureDevelopment, content: "C1" } }] }),
     ]);
     const storyManager = makeMockStoryManager();
     const deps = makeDeps({ summarizer, storyManager, maxActiveStories: 5 });

@@ -9,6 +9,20 @@ function extractRole(msg: unknown): string {
   return (msg as { role?: string }).role ?? "unknown";
 }
 
+// ── Preset Values ─────────────────────────────────────────────────
+
+const TYPE_PRESETS = [
+  "person", "project", "tool", "device", "document",
+  "dataset", "event", "workflow", "organization", "concept",
+  "environment", "place",
+] as const;
+
+const SCENARIO_PRESETS = [
+  "bug-fix", "feature-development", "deployment", "code-review",
+  "architecture-design", "debugging", "investigation", "discussion",
+  "refactoring", "configuration", "testing", "optimization",
+] as const;
+
 // ── Prompt Constants ────────────────────────────────────────────
 
 const INNER_TURN_B_SYSTEM_PROMPT = [
@@ -21,10 +35,10 @@ const INNER_TURN_B_SYSTEM_PROMPT = [
   "",
   "规则:",
   "- 可同时创建和更新多个 story",
-  "- subject: 目标实体（项目名、系统名、主题）。简短、稳定的名词短语。",
-  "- type: 代理动作。从 {analysis|design|implementation|debugging|testing|exploration|execution|optimization|configuration|assistance|decision} 选择。",
-  "- scenario: 工作领域。从 {software.coding|software.architecture|software.testing|software.devops|data.crawling|data.engineering|data.analytics|system.ops|system.automation|content.writing|content.design|content.media|media.public-opinion|research.knowledge|general} 选择。",
-  "- 优先复用已有维度值",
+  "- subject: 主体名称。具体的实体名称（人名、项目名、设备名等），不要用泛称。",
+  "- type: 主体类型。从枚举值中选择，无合适的可新建。",
+  "- scenario: 动作名称。短词或连字符短语，从枚举值中选择，无合适的可新建。",
+  "- 优先复用已有维度值（枚举值 = 预设 ∪ 已有，去重）",
   "- content 是 2-3 句叙事摘要，不要复制原文",
   "- targetStoryId 必须是已有 story 的 ID",
   "- 所有操作必须全部有效，任一无效则整批失败",
@@ -140,10 +154,11 @@ async function runInnerTurnB(deps: InnerTurnDeps): Promise<BResult> {
       ).join("\n")
     : "(none)";
 
-  const dimsStr = Object.entries(dims)
-    .filter(([, v]) => v.length > 0)
-    .map(([k, v]) => `${k}: {${v.join(", ")}}`)
-    .join("\n");
+  const dimsStr = [
+    buildDimLine("subject", dims.subjects),
+    buildDimLine("type", mergePresets(TYPE_PRESETS, dims.types)),
+    buildDimLine("scenario", mergePresets(SCENARIO_PRESETS, dims.scenarios)),
+  ].join("\n");
 
   const messagesStr = deps.sampleMessages();
 
@@ -359,6 +374,17 @@ function parseAOutput(raw: string): InnerTurnAResult | null {
   } catch {
     return null;
   }
+}
+
+// ── Dimension Merge Helpers ────────────────────────────────────
+
+function mergePresets(presets: readonly string[], existing: string[]): string[] {
+  const set = new Set([...presets, ...existing]);
+  return [...set];
+}
+
+function buildDimLine(name: string, values: string[]): string {
+  return `${name}: {${values.join(", ")}}`;
 }
 
 // ── Message Sampling Helpers ────────────────────────────────────

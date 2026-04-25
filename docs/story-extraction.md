@@ -6,23 +6,25 @@ Story management is handled by the **inner turn** mechanism, triggered every `in
 
 ## Three-Dimension Schema
 
-Stories are categorized by three orthogonal dimensions from the agent's perspective:
+Stories are categorized by three orthogonal dimensions:
 
-| Dimension | Question | Predefined Set |
-|-----------|----------|----------------|
-| **type** | What action does the agent take? | implementation, debugging, testing, exploration, analysis, design, optimization, configuration, assistance, decision, execution |
-| **subject** | What entity does the agent work on? | Free-form (project name, system name, topic) |
-| **scenario** | What domain does the work belong to? | software.coding, software.testing, software.devops, software.architecture, data.crawling, data.engineering, data.analytics, system.ops, system.automation, content.writing, content.design, content.media, media.public-opinion, research.knowledge, general |
+| Dimension | Question | Values |
+|-----------|----------|--------|
+| **subject** | What is the subject (name)? | Free-form, specific entity name. Reuse existing values when possible. |
+| **type** | What kind of entity is the subject? | Presets: person, project, tool, device, document, dataset, event, workflow, organization, concept, environment, place. Reuse or create new. |
+| **scenario** | What happened or what was done? | Action names (short words or hyphenated phrases). Presets: bug-fix, feature-development, deployment, code-review, architecture-design, debugging, investigation, discussion, refactoring, configuration, testing, optimization. Reuse or create new. |
 
 ### Design Rationale
 
 The three dimensions are intentionally orthogonal:
 
-- **type** is the agent's action verb (implementation vs debugging)
-- **subject** is the target entity (crawler vs auth-module)
-- **scenario** is the professional domain (software.coding vs data.crawling)
+- **subject** is the concrete entity name (auth-module vs crawler-pipeline)
+- **type** is what kind of entity it is (project vs device)
+- **scenario** is the action or event (bug-fix vs deployment)
 
-Same project + same action + different domain = different story. This avoids overlapping dimensions.
+Same subject + same type + different scenario = different story. This avoids overlapping dimensions.
+
+For all three dimensions, available enum values = presets ∪ existing (deduplicated). Prefer reusing existing values; create new ones only when no existing value fits.
 
 ## Inner Turn B — Story Management
 
@@ -80,8 +82,8 @@ normalizeDim(scenario) === normalizeDim(other.scenario)
 ```
 
 Normalization takes the first value from comma-separated lists and trims whitespace. This handles common LLM output issues:
-- `"implementation,debugging"` → `"implementation"` (take first)
-- `"software.coding，data.crawling"` → `"software.coding"` (Chinese comma)
+- `"project,tool"` → `"project"` (take first)
+- `"bug-fix，deployment"` → `"bug-fix"` (Chinese comma)
 
 Story IDs are generated from the normalized dimension values (SHA-256 hash), ensuring consistent IDs across similar dimension values.
 
@@ -90,7 +92,7 @@ Story IDs are generated from the normalized dimension values (SHA-256 hash), ens
 The `normalizeDimensionValue()` function splits on commas (`,`, `，`, `、`) and takes the first value:
 
 ```typescript
-"implementation,debugging" → "implementation"
-"software.coding，data.crawling" → "software.coding"
+"project,tool" → "project"
+"bug-fix，deployment" → "bug-fix"
 "  debugging  " → "debugging"
 ```
