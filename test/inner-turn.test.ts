@@ -29,7 +29,7 @@ function makeMockStoryManager(stories: StoryDocument[] = []) {
       const id = `story-${attrs.subject.slice(0, 4)}`;
       docs.set(id, {
         id,
-        title: `${attrs.subject} — ${attrs.type}`,
+        title: `${attrs.subject} · ${attrs.scenario}`,
         attributes: { subject: attrs.subject, type: attrs.type, scenario: attrs.scenario },
         sources: [],
         status: "active",

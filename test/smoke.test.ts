@@ -26,11 +26,10 @@ function cleanDir(dir: string): string {
 }
 
 describe("Smoke test: full pipeline with LLM", () => {
-  const outputDir = cleanDir(join(TEST_OUTPUT_DIR, "smoke"));
-
   it(
     "ingest → afterTurn → compact → assemble with story extraction",
     async () => {
+      const outputDir = cleanDir(join(TEST_OUTPUT_DIR, "smoke"));
       if (!await ollamaAvailable()) {
         console.log("Ollama not available — skipping");
         return;

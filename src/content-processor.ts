@@ -164,29 +164,48 @@ export class ContentProcessor {
       : `${text.length} chars`;
     const lines = text.split("\n").length;
 
+    const sizeInfo = `- **Size**: ${sizeStr}, ${lines} lines\n- **File**: ${storagePath}`;
+
     const parts: string[] = [
       `<persisted-output>`,
-      `Output too large (${sizeStr}, ${lines} lines). Full output saved to: ${storagePath}`,
-      ``,
-      `Preview (first ${PREVIEW_SIZE} chars):`,
-      text.slice(0, PREVIEW_SIZE),
+      sizeInfo,
       `</persisted-output>`,
     ];
 
     if (this.config.llmEnabled && this.summarizer) {
       try {
         const summary = await this.summarizer.rawGenerate(
-          "Summarize the following content concisely.",
-          text,
+          [
+            "Analyze the content and output a structured preview. /no_think",
+            "",
+            "Output ONLY these lines (markdown):",
+            "- **Type**: content type (log / source-code / data-table / config / markup / text / json / csv / other)",
+            "- **Content**: 1-2 sentence description of what this content contains",
+            "- **Structure**: key sections or patterns (e.g. headings, columns, stack frames)",
+          ].join("\n"),
+          text.slice(0, 4000),
           300,
         );
         if (summary) {
-          parts.splice(1, 0, ``, `--- AI Summary ---`, summary);
+          parts.splice(1, 0, summary);
         }
       } catch {
         // best-effort
       }
     }
+
+    // Preview: first 1000 + last 1000
+    parts.splice(parts.length - 1, 0,
+      "",
+      "--- Preview (first 1000 chars) ---",
+      text.slice(0, 1000),
+      "",
+      "--- Preview (last 1000 chars) ---",
+      text.slice(-1000),
+    );
+
+    const tail = text.slice(-1000);
+    parts.splice(parts.length - 1, 0, "", `--- Tail (last 1000 chars) ---`, tail);
 
     return parts.join("\n");
   }

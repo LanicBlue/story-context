@@ -19,7 +19,7 @@ A story-driven context engine with budget-aware message assembly for [OpenClaw](
 **assemble** builds the final context for the LLM. It takes the last N messages (where N = `messageWindowSize`, possibly reduced by compact) and active stories sorted by recency. Story display uses a two-layer model:
 
 - Top `fullStoryCount` stories -- full narrative
-- Next up to `summaryStoryCount` stories -- truncated narrative (last 200 chars)
+- Remaining up to `maxActiveStories` -- truncated narrative (last 200 chars)
 
 ## Quick Start
 
@@ -100,8 +100,7 @@ All budget units are tokens (internally multiplied by 4 for character conversion
 | `messageWindowSize` | int | 30 | Number of recent messages to load in assemble and inner turn input |
 | `innerTurnInterval` | int | 20 | Trigger inner turn every N turns |
 | `maxActiveStories` | int | 13 | Max active stories before FIFO eviction |
-| `fullStoryCount` | int | 3 | Top N active stories shown with full narrative |
-| `summaryStoryCount` | int | 10 | Additional stories shown with truncated narrative |
+| `fullStoryCount` | int | 3 | Top N active stories shown with full narrative (rest get summary) |
 | `activeStoryTTL` | int | 40 | Turns before a story expires |
 | `dedupReads` | bool | true | Deduplicate repeated read_file results |
 | `sessionFilter` | string/array | "main" | Session filter: main / all / regex array |

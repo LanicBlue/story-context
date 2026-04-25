@@ -10,6 +10,8 @@ import { loadJsonlConversation, printTree, TEST_OUTPUT_DIR } from "./test-data.j
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11435/v1";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:14b";
+const MSG_LIMIT = Number(process.env.MSG_LIMIT) || 0; // 0 = all
+const INNER_TURN_INTERVAL = Number(process.env.INNER_TURN_INTERVAL) || 20;
 
 async function ollamaAvailable(): Promise<boolean> {
   try {
@@ -35,7 +37,7 @@ async function main() {
   }
 
   const outputDir = cleanDir(join(TEST_OUTPUT_DIR, "smoke"));
-  const { messages, totalTokens } = loadJsonlConversation(0);
+  const { messages, totalTokens } = loadJsonlConversation(0, { limit: MSG_LIMIT || undefined });
   console.log(`Loaded ${messages.length} messages (~${totalTokens.toLocaleString()} tokens)`);
 
   const summarizer = new HttpSummarizer({ baseUrl: OLLAMA_BASE_URL, model: OLLAMA_MODEL, timeoutMs: 180_000 });
@@ -43,6 +45,7 @@ async function main() {
     maxHistoryTokens: 16_000,
     messageWindowSize: 30,
     largeTextThreshold: 4_000,
+    innerTurnInterval: INNER_TURN_INTERVAL,
     llmEnabled: true,
     sessionFilter: "all",
     storageDir: outputDir,

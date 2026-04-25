@@ -283,6 +283,7 @@ export class SmartContextEngine {
     }
 
     this.messageStore.saveState(params.sessionId, s);
+    this._persistContentFilters(params.sessionId);
   }
 
   // ── Story Focus ─────────────────────────────────────────────────
@@ -300,7 +301,10 @@ export class SmartContextEngine {
       maxActiveStories: this.getEffectiveMaxActiveStories(s),
       sampleMessages: () => sampleMessagesText(s.messages, this.getEffectiveMessageWindow(s)),
       sampleRawCleaned: () => [],
-      applyFilterRules: () => {},
+      applyFilterRules: (rules) => {
+        this.config.contentFilters.push(...rules);
+        this._persistContentFilters(sessionId);
+      },
     });
 
     this.lastInnerTurnResult = result;
@@ -375,13 +379,11 @@ export class SmartContextEngine {
     if (active.length === 0) return undefined;
 
     const parts: string[] = ["## Active Stories"];
-    const fullCount = this.config.fullStoryCount;
-    const summaryCount = this.config.summaryStoryCount;
+    const fullCount = Math.min(this.config.fullStoryCount, maxActive);
 
     for (let i = 0; i < active.length; i++) {
       const story = active[i];
       if (i < fullCount) {
-        // Full narrative
         parts.push("");
         parts.push(`### [[${story.id}]] ${story.title}`);
         parts.push(`- Subject: [[subject:${story.attributes.subject}]]`);
@@ -389,8 +391,7 @@ export class SmartContextEngine {
         parts.push(`- Scenario: [[scenario:${story.attributes.scenario}]]`);
         parts.push("");
         parts.push(story.narrative.slice(-2000));
-      } else if (i < fullCount + summaryCount) {
-        // Truncated summary
+      } else {
         const tail = story.narrative.slice(-500);
         parts.push("");
         parts.push(`- [[${story.id}]] ${story.title}`);
@@ -520,11 +521,24 @@ export class SmartContextEngine {
     return this.sessions.get(sessionId);
   }
 
+  /** @internal Exposed for web UI. */
+  _getStoryManager(sessionId: string): StoryIndexManager | undefined {
+    if (!this.sessions.has(sessionId)) return undefined;
+    return this.getStoryManager(sessionId);
+  }
+
   /** @internal Last inner turn result for logging. */
   _getLastInnerTurnResult() {
     const r = this.lastInnerTurnResult;
     this.lastInnerTurnResult = undefined;
     return r;
+  }
+
+  /** @internal Persist contentFilters to DB so inspector can read them. */
+  _persistContentFilters(sessionId: string): void {
+    const db = this.messageStore.getDb(sessionId);
+    db.prepare("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)")
+      .run("contentFilters", JSON.stringify(this.config.contentFilters));
   }
 }
 

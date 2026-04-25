@@ -40,7 +40,6 @@ export type SmartContextConfig = {
   }>;
   // Story context
   fullStoryCount: number;
-  summaryStoryCount: number;
   // Inner turn
   innerTurnInterval: number;
   maxActiveStories: number;

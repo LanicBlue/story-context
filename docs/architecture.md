@@ -96,7 +96,7 @@ Build context for the LLM:
 1. **Messages** — Take last N messages (N = `messageWindowSize`), with read_file dedup
 2. **Stories** — Active stories sorted by `lastUpdated`:
    - Top `fullStoryCount` stories → full narrative
-   - Next up to `summaryStoryCount` stories → truncated narrative (last 200 chars)
+   - Remaining up to `maxActiveStories` → truncated narrative (last 200 chars)
 
 ## Active Story Lifecycle
 
@@ -130,8 +130,7 @@ All budget units are **tokens** (internally ×4 for char conversion).
 | `messageWindowSize` | int | 30 | Number of recent messages to load (assemble + innerTurn input) |
 | `innerTurnInterval` | int | 20 | Trigger inner turn every N turns |
 | `maxActiveStories` | int | 13 | Max active stories before eviction |
-| `fullStoryCount` | int | 3 | Top N active stories shown with full narrative |
-| `summaryStoryCount` | int | 10 | Additional stories shown with truncated narrative |
+| `fullStoryCount` | int | 3 | Top N active stories shown with full narrative (rest get summary) |
 | `activeStoryTTL` | int | 40 | Turns before a story expires |
 | `dedupReads` | bool | true | Deduplicate repeated read_file results |
 | `sessionFilter` | string/array | "main" | Session filter: main/all/regex array |

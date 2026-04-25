@@ -124,7 +124,7 @@ export function makeToolResult(
 export function makeStoryDoc(overrides: Partial<StoryDocument> = {}): StoryDocument {
   return {
     id: "story-test1234",
-    title: `${SUBJECTS.authModule} — ${TYPES.project}`,
+    title: `${SUBJECTS.authModule} · ${SCENARIOS.bugFix}`,
     attributes: {
       subject: SUBJECTS.authModule,
       type: TYPES.project,

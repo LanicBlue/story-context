@@ -168,7 +168,7 @@ export class StoryIndexManager {
   ): string {
     const id = this.generateStoryId(attrs);
     const now = Date.now();
-    const title = `${attrs.subject} — ${attrs.type}`;
+    const title = `${attrs.subject} · ${attrs.scenario}`;
 
     const doc: StoryDocument = {
       id,
@@ -244,6 +244,23 @@ export class StoryIndexManager {
       types: [...types],
       scenarios: [...scenarios],
     };
+  }
+
+  /** Find a story by exact three-dimension match (case-insensitive). */
+  findStoryByDimensions(attrs: { subject: string; type: string; scenario: string }): StoryDocument | undefined {
+    const s = attrs.subject.toLowerCase();
+    const t = attrs.type.toLowerCase();
+    const sc = attrs.scenario.toLowerCase();
+    for (const doc of this.index.documents.values()) {
+      if (
+        doc.attributes.subject.toLowerCase() === s &&
+        doc.attributes.type.toLowerCase() === t &&
+        doc.attributes.scenario.toLowerCase() === sc
+      ) {
+        return doc;
+      }
+    }
+    return undefined;
   }
 
   /** Get all stories for an entity. */

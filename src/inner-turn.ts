@@ -11,13 +11,13 @@ function extractRole(msg: unknown): string {
 
 // ── Preset Values ─────────────────────────────────────────────────
 
-const TYPE_PRESETS = [
+export const TYPE_PRESETS = [
   "person", "project", "tool", "device", "document",
   "dataset", "event", "workflow", "organization", "concept",
   "environment", "place",
 ] as const;
 
-const SCENARIO_PRESETS = [
+export const SCENARIO_PRESETS = [
   "bug-fix", "feature-development", "deployment", "code-review",
   "architecture-design", "debugging", "investigation", "discussion",
   "refactoring", "configuration", "testing", "optimization",
@@ -29,19 +29,19 @@ const INNER_TURN_B_SYSTEM_PROMPT = [
   "你是 story 管理助手。分析消息，输出一组 story 操作。 /no_think",
   "",
   "输出 JSON:",
-  '{"actions":[{"action":"create","story":{"subject":"...","type":"...","scenario":"...","content":"..."}},{"action":"update","targetStoryId":"...","updatedContent":"...","append":true/false}]}',
+  '{"actions":[{"action":"create","story":{"subject":"...","type":"...","scenario":"...","content":"..."}},{"action":"update","target":{"subject":"...","type":"...","scenario":"..."},"updatedContent":"...","append":true/false}]}',
   "",
   "无变化: {\"actions\":[]}",
   "",
   "规则:",
   "- 可同时创建和更新多个 story",
-  "- subject: 主体名称。具体的实体名称（人名、项目名、设备名等），不要用泛称。",
-  "- type: 主体类型。从枚举值中选择，无合适的可新建。",
-  "- scenario: 动作名称。短词或连字符短语，从枚举值中选择，无合适的可新建。",
-  "- 优先复用已有维度值（枚举值 = 预设 ∪ 已有，去重）",
+  "- subject: 消息实际谈论的对象。可以是实体（n8n, 即刻平台）或概念/现象（苹果下落, 数据污染）。",
+  "  根据对话焦点判断粒度：讨论苹果→用苹果，讨论苹果下落现象→用苹果下落。",
+  "  不加多余修饰词。正确: n8n, 即刻平台, 工作流51。错误: n8n工具, 即刻平台API。",
+  "- type: 主体类型。从枚举值中选择最匹配的。",
+  "- scenario: 动作名称。从枚举值中选择最匹配的。",
   "- content 是 2-3 句叙事摘要，不要复制原文",
-  "- targetStoryId 必须是已有 story 的 ID",
-  "- 所有操作必须全部有效，任一无效则整批失败",
+  "- update 操作通过 target 三维度定位已有 story（不需要 ID）",
 ].join("\n");
 
 const INNER_TURN_A_SYSTEM_PROMPT = [
@@ -62,7 +62,7 @@ const INNER_TURN_A_SYSTEM_PROMPT = [
 export type InnerTurnBAction = {
   action: "create" | "update" | "skip";
   story?: { subject: string; type: string; scenario: string; content: string };
-  targetStoryId?: string;
+  target?: { subject: string; type: string; scenario: string };
   updatedContent?: string;
   append?: boolean;
 };
@@ -199,7 +199,12 @@ async function runInnerTurnB(deps: InnerTurnDeps): Promise<BResult> {
       // Replace update actions with confirmed versions
       confirmedActions = parsed.actions.map(a => {
         if (a.action !== "update") return a;
-        const confirmed = round2Result.confirmed!.find(c => c.targetStoryId === a.targetStoryId);
+        const confirmed = round2Result.confirmed!.find(c => {
+          const ct = c.target;
+          const at = a.target;
+          if (!ct || !at) return false;
+          return ct.subject === at.subject && ct.type === at.type && ct.scenario === at.scenario;
+        });
         return confirmed ?? a;
       });
     }
@@ -222,8 +227,14 @@ async function runInnerTurnBRound2(
   updateActions: InnerTurnBAction[],
 ): Promise<{ success: boolean; confirmed?: InnerTurnBAction[]; error?: string }> {
   const storyDetails = updateActions.map(a => {
-    const doc = stories.find(s => s.id === a.targetStoryId);
-    if (!doc) return `[ERROR] Story ${a.targetStoryId} not found`;
+    const t = a.target;
+    if (!t) return `[ERROR] Update action missing target dimensions`;
+    const doc = stories.find(s =>
+      s.attributes.subject === t.subject &&
+      s.attributes.type === t.type &&
+      s.attributes.scenario === t.scenario,
+    );
+    if (!doc) return `[ERROR] Story not found for target: ${t.subject} | ${t.type} | ${t.scenario}`;
     return `Story ${doc.id}:\nTitle: ${doc.title}\nAttributes: ${doc.attributes.subject} | ${doc.attributes.type} | ${doc.attributes.scenario}\nNarrative:\n${doc.narrative}\n\nProposed update: ${a.updatedContent ?? "(empty)"}`;
   }).join("\n\n---\n\n");
 
@@ -269,9 +280,11 @@ function executeBActions(deps: InnerTurnDeps, actions: InnerTurnBAction[]): BRes
         }, currentTurn, activeStoryTTL);
         created.push(id);
         createdCount++;
-      } else if (action.action === "update" && action.targetStoryId && action.updatedContent) {
+      } else if (action.action === "update" && action.target && action.updatedContent) {
+        const doc = storyManager.findStoryByDimensions(action.target);
+        if (!doc) throw new Error(`Story not found for target: ${action.target.subject} | ${action.target.type} | ${action.target.scenario}`);
         storyManager.updateStoryContentDirect(
-          action.targetStoryId,
+          doc.id,
           action.updatedContent,
           action.append ?? true,
           currentTurn,
