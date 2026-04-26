@@ -15,6 +15,8 @@ export type SessionState = {
   /** Adjusted by compact() when over budget. undefined = use default. */
   adjustedMessageWindowSize?: number;
   adjustedMaxActiveStories?: number;
+  /** Recent raw→filtered message pairs for InnerTurnA analysis. */
+  cleanedSamples: Array<{ raw: string; cleaned: string }>;
 };
 
 /** LLM interface used by inner turn. */

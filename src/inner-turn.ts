@@ -45,7 +45,7 @@ const INNER_TURN_B_SYSTEM_PROMPT = [
 ].join("\n");
 
 const INNER_TURN_A_SYSTEM_PROMPT = [
-  "你是内容质量分析助手。分析过滤规则效果，输出新规则。 /no_think",
+  "你是内容过滤规则助手。分析当前规则效果，输出修改后的完整规则组。 /no_think",
   "",
   "输出 JSON:",
   '{"rules":[{"match":"contains|regex","pattern":"...","granularity":"message|block|line"}],"reason":"..."}',
@@ -54,6 +54,8 @@ const INNER_TURN_A_SYSTEM_PROMPT = [
   "- match 只能是 contains 或 regex",
   "- granularity 只能是 message、block 或 line",
   "- pattern 是匹配模式",
+  "- 输出完整规则组（替换所有现有规则）",
+  "- 如无需修改，原样输出当前规则组",
   "- 确保输出有效 JSON",
 ].join("\n");
 
@@ -91,6 +93,7 @@ type InnerTurnDeps = {
   maxActiveStories: number;
   sampleMessages: () => string;
   sampleRawCleaned: () => { raw: string; cleaned: string }[];
+  currentFilters: () => Array<{ match: "contains" | "regex"; pattern: string; caseSensitive?: boolean; granularity: "message" | "block" | "line" }>;
   applyFilterRules: (rules: InnerTurnAResult["rules"]) => void;
 };
 
@@ -238,16 +241,28 @@ async function runInnerTurnBRound2(
     return `Story ${doc.id}:\nTitle: ${doc.title}\nAttributes: ${doc.attributes.subject} | ${doc.attributes.type} | ${doc.attributes.scenario}\nNarrative:\n${doc.narrative}\n\nProposed update: ${a.updatedContent ?? "(empty)"}`;
   }).join("\n\n---\n\n");
 
+  const systemPrompt = [
+    "你是 story 更新确认助手。审查提议的 story 更新，确认或修正内容。 /no_think",
+    "",
+    "输出 JSON:",
+    '{"actions":[{"action":"update","target":{"subject":"...","type":"...","scenario":"..."},"updatedContent":"...","append":true/false}]}',
+    "",
+    "规则:",
+    "- updatedContent 是 2-3 句叙事摘要，不要复制原文",
+    "- append=true 表示追加到现有叙事，append=false 表示替换",
+    "- 可以修正 target 维度如果匹配有误",
+  ].join("\n");
+
   const prompt = [
-    "确认或修正以下 story 更新。输出更新后的 JSON（与之前格式相同）。",
+    "确认或修正以下 story 更新。",
     "",
     storyDetails,
     "",
-    "输出最终确认的更新内容。",
+    "输出确认后的更新 JSON。",
   ].join("\n");
 
   try {
-    const output = await summarizer.rawGenerate(INNER_TURN_B_SYSTEM_PROMPT, prompt, 800);
+    const output = await summarizer.rawGenerate(systemPrompt, prompt, 800);
     const parsed = parseBOutput(output);
     if (!parsed) {
       return { success: false, error: "Round 2: JSON parse failed" };
@@ -323,10 +338,15 @@ async function runInnerTurnA(
 ): Promise<boolean> {
   const { summarizer } = deps;
   const samples = deps.sampleRawCleaned();
+  const currentRules = deps.currentFilters();
 
   const retryHint = previousAError
     ? `[重试] 上次执行失败。错误: ${previousAError}。请简化输出，确保有效 JSON。\n\n`
     : "";
+
+  const rulesStr = currentRules.map((r, i) =>
+    `[${i}] ${r.match} / ${r.pattern} / ${r.granularity}${r.caseSensitive ? " (case-sensitive)" : ""}`
+  ).join("\n") || "(none)";
 
   const rawStr = samples.map((s, i) => `[${i}] ${s.raw}`).join("\n");
   const cleanedStr = samples.map((s, i) => `[${i}] ${s.cleaned}`).join("\n");
@@ -339,19 +359,22 @@ async function runInnerTurnA(
     "## 失败信息",
     bError,
     "",
-    "## 原始数据（清理前）",
+    "## 当前过滤规则",
+    rulesStr,
+    "",
+    "## 原始数据（过滤前）",
     rawStr,
     "",
-    "## 过滤后数据（清理后）",
+    "## 过滤后数据（当前规则效果）",
     cleanedStr,
     "",
-    '输出 JSON: {"rules":[{"match":"contains|regex","pattern":"...","granularity":"message|block|line"}],"reason":"..."}',
+    '输出修改后的完整规则组 JSON: {"rules":[...],"reason":"..."}',
   ].join("\n");
 
   try {
     const output = await summarizer.rawGenerate(INNER_TURN_A_SYSTEM_PROMPT, prompt, 500);
     const parsed = parseAOutput(output);
-    if (!parsed || !parsed.rules || parsed.rules.length === 0) return false;
+    if (!parsed || !parsed.rules) return false;
 
     deps.applyFilterRules(parsed.rules);
     return true;

@@ -3,7 +3,6 @@ import type { ContentFilterRule, TextBlock } from "./content-filter.js";
 import { applyContentFilters } from "./content-filter.js";
 import { ContentStorage } from "./content-storage.js";
 
-const PREVIEW_SIZE = 2000;
 const PERSISTED_MARKER = "<persisted-output>";
 
 type InternalBlock = TextBlock & { raw?: unknown };
@@ -77,6 +76,28 @@ export class ContentProcessor {
   }
 
   // ── Internal ────────────────────────────────────────────────────
+
+  /** Apply only content filters — returns raw→cleaned pair for InnerTurnA analysis. */
+  applyFiltersOnly(content: unknown): { raw: string; cleaned: string; changed: boolean } {
+    const rawText = this.extractTextContent(content);
+    if (!rawText || this.config.contentFilters.length === 0) {
+      return { raw: rawText, cleaned: rawText, changed: false };
+    }
+
+    const blocks = this.normalizeContent(content);
+    const result = applyContentFilters(blocks, this.config.contentFilters);
+
+    if (result.dropMessage) {
+      return { raw: rawText, cleaned: "(dropped)", changed: true };
+    }
+
+    if (result.filteredBlocks) {
+      const cleanedText = result.filteredBlocks.map(b => b.text).join("\n");
+      return { raw: rawText, cleaned: cleanedText, changed: true };
+    }
+
+    return { raw: rawText, cleaned: rawText, changed: false };
+  }
 
   private extractTextContent(content: unknown): string {
     if (typeof content === "string") return content;
@@ -203,9 +224,6 @@ export class ContentProcessor {
       "--- Preview (last 1000 chars) ---",
       text.slice(-1000),
     );
-
-    const tail = text.slice(-1000);
-    parts.splice(parts.length - 1, 0, "", `--- Tail (last 1000 chars) ---`, tail);
 
     return parts.join("\n");
   }

@@ -92,6 +92,7 @@ export class SmartContextEngine {
         currentTurn: 0,
         turnsSinceInnerTurn: 0,
         innerTurnRunning: false,
+        cleanedSamples: [],
       };
       this.sessions.set(sessionId, s);
     }
@@ -222,6 +223,13 @@ export class SmartContextEngine {
         msg.content = stripPlatformMetadata(msg.content);
       }
 
+      // Capture filter effect for InnerTurnA
+      const filterSample = this.contentProcessor.applyFiltersOnly(msg.content);
+      if (filterSample.changed) {
+        if (s.cleanedSamples.length >= 10) s.cleanedSamples.shift();
+        s.cleanedSamples.push({ raw: filterSample.raw, cleaned: filterSample.cleaned });
+      }
+
       // Apply content filters + persist media/large text
       const processed = await this.contentProcessor.processContent(
         msg.content,
@@ -300,9 +308,10 @@ export class SmartContextEngine {
       activeStoryTTL: this.config.activeStoryTTL,
       maxActiveStories: this.getEffectiveMaxActiveStories(s),
       sampleMessages: () => sampleMessagesText(s.messages, this.getEffectiveMessageWindow(s)),
-      sampleRawCleaned: () => [],
+      sampleRawCleaned: () => s.cleanedSamples,
+      currentFilters: () => this.config.contentFilters,
       applyFilterRules: (rules) => {
-        this.config.contentFilters.push(...rules);
+        this.config.contentFilters = rules;
         this._persistContentFilters(sessionId);
       },
     });

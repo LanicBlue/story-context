@@ -196,6 +196,7 @@ export class MessageStore {
         innerTurnRunning: false,
         adjustedMessageWindowSize: adjMsgWindow ? parseInt(adjMsgWindow, 10) : undefined,
         adjustedMaxActiveStories: adjMaxStories ? parseInt(adjMaxStories, 10) : undefined,
+        cleanedSamples: [],
       };
     } finally {
       db.close();
